@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "mccodeemitter"
 #include "MCTargetDesc/ARMMCTargetDesc.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
 #include "MCTargetDesc/ARMBaseInfo.h"
@@ -31,28 +30,31 @@
 
 using namespace llvm;
 
+#define DEBUG_TYPE "mccodeemitter"
+
 STATISTIC(MCNumEmitted, "Number of MC instructions emitted.");
 STATISTIC(MCNumCPRelocations, "Number of constant pool relocations created.");
 
 namespace {
 class ARMMCCodeEmitter : public MCCodeEmitter {
-  ARMMCCodeEmitter(const ARMMCCodeEmitter &) LLVM_DELETED_FUNCTION;
-  void operator=(const ARMMCCodeEmitter &) LLVM_DELETED_FUNCTION;
+  ARMMCCodeEmitter(const ARMMCCodeEmitter &) = delete;
+  void operator=(const ARMMCCodeEmitter &) = delete;
   const MCInstrInfo &MCII;
   const MCContext &CTX;
+  bool IsLittleEndian;
 
 public:
-  ARMMCCodeEmitter(const MCInstrInfo &mcii, MCContext &ctx)
-    : MCII(mcii), CTX(ctx) {
+  ARMMCCodeEmitter(const MCInstrInfo &mcii, MCContext &ctx, bool IsLittle)
+    : MCII(mcii), CTX(ctx), IsLittleEndian(IsLittle) {
   }
 
-  ~ARMMCCodeEmitter() {}
+  ~ARMMCCodeEmitter() override {}
 
   bool isThumb(const MCSubtargetInfo &STI) const {
-    return (STI.getFeatureBits() & ARM::ModeThumb) != 0;
+    return STI.getFeatureBits()[ARM::ModeThumb];
   }
   bool isThumb2(const MCSubtargetInfo &STI) const {
-    return isThumb(STI) && (STI.getFeatureBits() & ARM::FeatureThumb2) != 0;
+    return isThumb(STI) && STI.getFeatureBits()[ARM::FeatureThumb2];
   }
   bool isTargetMachO(const MCSubtargetInfo &STI) const {
     Triple TT(STI.getTargetTriple());
@@ -271,7 +273,25 @@ public:
   unsigned getSOImmOpValue(const MCInst &MI, unsigned Op,
                            SmallVectorImpl<MCFixup> &Fixups,
                            const MCSubtargetInfo &STI) const {
-    unsigned SoImm = MI.getOperand(Op).getImm();
+
+    const MCOperand &MO = MI.getOperand(Op);
+
+    // We expect MO to be an immediate or an expression,
+    // if it is an immediate - that's fine, just encode the value.
+    // Otherwise - create a Fixup.
+    if (MO.isExpr()) {
+      const MCExpr *Expr = MO.getExpr();
+      // In instruction code this value always encoded as lowest 12 bits,
+      // so we don't have to perform any specific adjustments.
+      // Due to requirements of relocatable records we have to use FK_Data_4.
+      // See ARMELFObjectWriter::ExplicitRelSym and
+      //     ARMELFObjectWriter::GetRelocTypeInner for more details.
+      MCFixupKind Kind = MCFixupKind(FK_Data_4);
+      Fixups.push_back(MCFixup::create(0, Expr, Kind, MI.getLoc()));
+      return 0;
+    }
+
+    unsigned SoImm = MO.getImm();
     int SoImmVal = ARM_AM::getSOImmVal(SoImm);
     assert(SoImmVal != -1 && "Not a valid so_imm value!");
 
@@ -282,6 +302,28 @@ public:
     // Encode immed_8.
     Binary |= ARM_AM::getSOImmValImm((unsigned)SoImmVal);
     return Binary;
+  }
+
+  unsigned getModImmOpValue(const MCInst &MI, unsigned Op,
+                            SmallVectorImpl<MCFixup> &Fixups,
+                            const MCSubtargetInfo &ST) const {
+    const MCOperand &MO = MI.getOperand(Op);
+
+    // Support for fixups (MCFixup)
+    if (MO.isExpr()) {
+      const MCExpr *Expr = MO.getExpr();
+      // In instruction code this value always encoded as lowest 12 bits,
+      // so we don't have to perform any specific adjustments.
+      // Due to requirements of relocatable records we have to use FK_Data_4.
+      // See ARMELFObjectWriter::ExplicitRelSym and
+      //     ARMELFObjectWriter::GetRelocTypeInner for more details.
+      MCFixupKind Kind = MCFixupKind(FK_Data_4);
+      Fixups.push_back(MCFixup::create(0, Expr, Kind, MI.getLoc()));
+      return 0;
+    }
+
+    // Immediate is already in its encoded format
+    return MO.getImm();
   }
 
   /// getT2SOImmOpValue - Return an encoded 12-bit shifted-immediate value.
@@ -385,23 +427,28 @@ public:
   void EmitConstant(uint64_t Val, unsigned Size, raw_ostream &OS) const {
     // Output the constant in little endian byte order.
     for (unsigned i = 0; i != Size; ++i) {
-      EmitByte(Val & 255, OS);
-      Val >>= 8;
+      unsigned Shift = IsLittleEndian ? i * 8 : (Size - 1 - i) * 8;
+      EmitByte((Val >> Shift) & 0xff, OS);
     }
   }
 
-  void EncodeInstruction(const MCInst &MI, raw_ostream &OS,
+  void encodeInstruction(const MCInst &MI, raw_ostream &OS,
                          SmallVectorImpl<MCFixup> &Fixups,
-                         const MCSubtargetInfo &STI) const;
+                         const MCSubtargetInfo &STI) const override;
 };
 
 } // end anonymous namespace
 
-MCCodeEmitter *llvm::createARMMCCodeEmitter(const MCInstrInfo &MCII,
-                                            const MCRegisterInfo &MRI,
-                                            const MCSubtargetInfo &STI,
-                                            MCContext &Ctx) {
-  return new ARMMCCodeEmitter(MCII, Ctx);
+MCCodeEmitter *llvm::createARMLEMCCodeEmitter(const MCInstrInfo &MCII,
+                                              const MCRegisterInfo &MRI,
+                                              MCContext &Ctx) {
+  return new ARMMCCodeEmitter(MCII, Ctx, true);
+}
+
+MCCodeEmitter *llvm::createARMBEMCCodeEmitter(const MCInstrInfo &MCII,
+                                              const MCRegisterInfo &MRI,
+                                              MCContext &Ctx) {
+  return new ARMMCCodeEmitter(MCII, Ctx, false);
 }
 
 /// NEONThumb2DataIPostEncoder - Post-process encoded NEON data-processing
@@ -548,7 +595,7 @@ static uint32_t getBranchTargetOpValue(const MCInst &MI, unsigned OpIdx,
   assert(MO.isExpr() && "Unexpected branch target type!");
   const MCExpr *Expr = MO.getExpr();
   MCFixupKind Kind = MCFixupKind(FixupKind);
-  Fixups.push_back(MCFixup::Create(0, Expr, Kind, MI.getLoc()));
+  Fixups.push_back(MCFixup::create(0, Expr, Kind, MI.getLoc()));
 
   // All of the information is in the fixup.
   return 0;
@@ -853,7 +900,7 @@ getAddrModeImm12OpValue(const MCInst &MI, unsigned OpIdx,
         Kind = MCFixupKind(ARM::fixup_t2_ldst_pcrel_12);
       else
         Kind = MCFixupKind(ARM::fixup_arm_ldst_pcrel_12);
-      Fixups.push_back(MCFixup::Create(0, Expr, Kind, MI.getLoc()));
+      Fixups.push_back(MCFixup::create(0, Expr, Kind, MI.getLoc()));
 
       ++MCNumCPRelocations;
     } else {
@@ -932,7 +979,7 @@ getT2AddrModeImm8s4OpValue(const MCInst &MI, unsigned OpIdx,
     assert(MO.isExpr() && "Unexpected machine operand type!");
     const MCExpr *Expr = MO.getExpr();
     MCFixupKind Kind = MCFixupKind(ARM::fixup_t2_pcrel_10);
-    Fixups.push_back(MCFixup::Create(0, Expr, Kind, MI.getLoc()));
+    Fixups.push_back(MCFixup::create(0, Expr, Kind, MI.getLoc()));
 
     ++MCNumCPRelocations;
   } else
@@ -965,19 +1012,6 @@ getT2AddrModeImm0_1020s4OpValue(const MCInst &MI, unsigned OpIdx,
   unsigned Reg = CTX.getRegisterInfo()->getEncodingValue(MO.getReg());
   unsigned Imm8 = MO1.getImm();
   return (Reg << 8) | Imm8;
-}
-
-// FIXME: This routine assumes that a binary
-// expression will always result in a PCRel expression
-// In reality, its only true if one or more subexpressions
-// is itself a PCRel (i.e. "." in asm or some other pcrel construct)
-// but this is good enough for now.
-static bool EvaluateAsPCRel(const MCExpr *Expr) {
-  switch (Expr->getKind()) {
-  default: llvm_unreachable("Unexpected expression type");
-  case MCExpr::SymbolRef: return false;
-  case MCExpr::Binary: return true;
-  }
 }
 
 uint32_t
@@ -1015,43 +1049,25 @@ ARMMCCodeEmitter::getHiLo16ImmOpValue(const MCInst &MI, unsigned OpIdx,
     switch (ARM16Expr->getKind()) {
     default: llvm_unreachable("Unsupported ARMFixup");
     case ARMMCExpr::VK_ARM_HI16:
-      if (!isTargetMachO(STI) && EvaluateAsPCRel(E))
-        Kind = MCFixupKind(isThumb2(STI)
-                           ? ARM::fixup_t2_movt_hi16_pcrel
-                           : ARM::fixup_arm_movt_hi16_pcrel);
-      else
-        Kind = MCFixupKind(isThumb2(STI)
-                           ? ARM::fixup_t2_movt_hi16
-                           : ARM::fixup_arm_movt_hi16);
+      Kind = MCFixupKind(isThumb2(STI) ? ARM::fixup_t2_movt_hi16
+                                       : ARM::fixup_arm_movt_hi16);
       break;
     case ARMMCExpr::VK_ARM_LO16:
-      if (!isTargetMachO(STI) && EvaluateAsPCRel(E))
-        Kind = MCFixupKind(isThumb2(STI)
-                           ? ARM::fixup_t2_movw_lo16_pcrel
-                           : ARM::fixup_arm_movw_lo16_pcrel);
-      else
-        Kind = MCFixupKind(isThumb2(STI)
-                           ? ARM::fixup_t2_movw_lo16
-                           : ARM::fixup_arm_movw_lo16);
+      Kind = MCFixupKind(isThumb2(STI) ? ARM::fixup_t2_movw_lo16
+                                       : ARM::fixup_arm_movw_lo16);
       break;
     }
-    Fixups.push_back(MCFixup::Create(0, E, Kind, MI.getLoc()));
+
+    Fixups.push_back(MCFixup::create(0, E, Kind, MI.getLoc()));
     return 0;
   }
   // If the expression doesn't have :upper16: or :lower16: on it,
-  // it's just a plain immediate expression, and those evaluate to
+  // it's just a plain immediate expression, previously those evaluated to
   // the lower 16 bits of the expression regardless of whether
-  // we have a movt or a movw.
-  if (!isTargetMachO(STI) && EvaluateAsPCRel(E))
-    Kind = MCFixupKind(isThumb2(STI)
-                       ? ARM::fixup_t2_movw_lo16_pcrel
-                       : ARM::fixup_arm_movw_lo16_pcrel);
-  else
-    Kind = MCFixupKind(isThumb2(STI)
-                       ? ARM::fixup_t2_movw_lo16
-                       : ARM::fixup_arm_movw_lo16);
-  Fixups.push_back(MCFixup::Create(0, E, Kind, MI.getLoc()));
-  return 0;
+  // we have a movt or a movw, but that led to misleadingly results.
+  // This is now disallowed in the the AsmParser in validateInstruction()
+  // so this should never happen.
+  llvm_unreachable("expression without :upper16: or :lower16:");
 }
 
 uint32_t ARMMCCodeEmitter::
@@ -1178,7 +1194,7 @@ getAddrMode3OpValue(const MCInst &MI, unsigned OpIdx,
     assert(MO.isExpr() && "Unexpected machine operand type!");
     const MCExpr *Expr = MO.getExpr();
     MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_pcrel_10_unscaled);
-    Fixups.push_back(MCFixup::Create(0, Expr, Kind, MI.getLoc()));
+    Fixups.push_back(MCFixup::create(0, Expr, Kind, MI.getLoc()));
 
     ++MCNumCPRelocations;
     return (Rn << 9) | (1 << 13);
@@ -1260,7 +1276,7 @@ getAddrMode5OpValue(const MCInst &MI, unsigned OpIdx,
       Kind = MCFixupKind(ARM::fixup_t2_pcrel_10);
     else
       Kind = MCFixupKind(ARM::fixup_arm_pcrel_10);
-    Fixups.push_back(MCFixup::Create(0, Expr, Kind, MI.getLoc()));
+    Fixups.push_back(MCFixup::create(0, Expr, Kind, MI.getLoc()));
 
     ++MCNumCPRelocations;
   } else {
@@ -1650,7 +1666,7 @@ getShiftRight64Imm(const MCInst &MI, unsigned Op,
 }
 
 void ARMMCCodeEmitter::
-EncodeInstruction(const MCInst &MI, raw_ostream &OS,
+encodeInstruction(const MCInst &MI, raw_ostream &OS,
                   SmallVectorImpl<MCFixup> &Fixups,
                   const MCSubtargetInfo &STI) const {
   // Pseudo instructions don't get encoded.

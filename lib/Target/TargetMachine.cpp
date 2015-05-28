@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
@@ -21,73 +22,54 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCCodeGenInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/SectionKind.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
-
-//---------------------------------------------------------------------------
-// Command-line options that tend to be useful on more than one back-end.
-//
-
-namespace llvm {
-  bool HasDivModLibcall;
-  bool AsmVerbosityDefault(false);
-}
-
-static cl::opt<bool>
-DataSections("fdata-sections",
-  cl::desc("Emit data into separate sections"),
-  cl::init(false));
-static cl::opt<bool>
-FunctionSections("ffunction-sections",
-  cl::desc("Emit functions into separate sections"),
-  cl::init(false));
 
 //---------------------------------------------------------------------------
 // TargetMachine Class
 //
 
-TargetMachine::TargetMachine(const Target &T,
+TargetMachine::TargetMachine(const Target &T, StringRef DataLayoutString,
                              StringRef TT, StringRef CPU, StringRef FS,
                              const TargetOptions &Options)
-  : TheTarget(T), TargetTriple(TT), TargetCPU(CPU), TargetFS(FS),
-    CodeGenInfo(0), AsmInfo(0),
-    MCRelaxAll(false),
-    MCNoExecStack(false),
-    MCSaveTempLabels(false),
-    MCUseCFI(true),
-    MCUseDwarfDirectory(false),
-    RequireStructuredCFG(false),
-    Options(Options) {
-}
+    : TheTarget(T), DL(DataLayoutString), TargetTriple(TT), TargetCPU(CPU),
+      TargetFS(FS), CodeGenInfo(nullptr), AsmInfo(nullptr), MRI(nullptr),
+      MII(nullptr), STI(nullptr), RequireStructuredCFG(false),
+      Options(Options) {}
 
 TargetMachine::~TargetMachine() {
   delete CodeGenInfo;
   delete AsmInfo;
+  delete MRI;
+  delete MII;
+  delete STI;
 }
 
 /// \brief Reset the target options based on the function's attributes.
-void TargetMachine::resetTargetOptions(const MachineFunction *MF) const {
-  const Function *F = MF->getFunction();
-  TargetOptions &TO = MF->getTarget().Options;
-
-#define RESET_OPTION(X, Y)                                              \
-  do {                                                                  \
-    if (F->hasFnAttribute(Y))                                           \
-      TO.X =                                                            \
-        (F->getAttributes().                                            \
-           getAttribute(AttributeSet::FunctionIndex,                    \
-                        Y).getValueAsString() == "true");               \
+// FIXME: This function needs to go away for a number of reasons:
+// a) global state on the TargetMachine is terrible in general,
+// b) there's no default state here to keep,
+// c) these target options should be passed only on the function
+//    and not on the TargetMachine (via TargetOptions) at all.
+void TargetMachine::resetTargetOptions(const Function &F) const {
+#define RESET_OPTION(X, Y)                                                     \
+  do {                                                                         \
+    if (F.hasFnAttribute(Y))                                                   \
+      Options.X = (F.getFnAttribute(Y).getValueAsString() == "true");          \
   } while (0)
 
-  RESET_OPTION(NoFramePointerElim, "no-frame-pointer-elim");
   RESET_OPTION(LessPreciseFPMADOption, "less-precise-fpmad");
   RESET_OPTION(UnsafeFPMath, "unsafe-fp-math");
   RESET_OPTION(NoInfsFPMath, "no-infs-fp-math");
   RESET_OPTION(NoNaNsFPMath, "no-nans-fp-math");
-  RESET_OPTION(UseSoftFloat, "use-soft-float");
   RESET_OPTION(DisableTailCalls, "disable-tail-calls");
 }
 
@@ -108,8 +90,8 @@ CodeModel::Model TargetMachine::getCodeModel() const {
 }
 
 /// Get the IR-specified TLS model for Var.
-static TLSModel::Model getSelectedTLSModel(const GlobalVariable *Var) {
-  switch (Var->getThreadLocalMode()) {
+static TLSModel::Model getSelectedTLSModel(const GlobalValue *GV) {
+  switch (GV->getThreadLocalMode()) {
   case GlobalVariable::NotThreadLocal:
     llvm_unreachable("getSelectedTLSModel for non-TLS variable");
     break;
@@ -126,19 +108,13 @@ static TLSModel::Model getSelectedTLSModel(const GlobalVariable *Var) {
 }
 
 TLSModel::Model TargetMachine::getTLSModel(const GlobalValue *GV) const {
-  // If GV is an alias then use the aliasee for determining
-  // thread-localness.
-  if (const GlobalAlias *GA = dyn_cast<GlobalAlias>(GV))
-    GV = GA->resolveAliasedGlobal(false);
-  const GlobalVariable *Var = cast<GlobalVariable>(GV);
-
-  bool isLocal = Var->hasLocalLinkage();
-  bool isDeclaration = Var->isDeclaration();
+  bool isLocal = GV->hasLocalLinkage();
+  bool isDeclaration = GV->isDeclaration();
   bool isPIC = getRelocationModel() == Reloc::PIC_;
   bool isPIE = Options.PositionIndependentExecutable;
   // FIXME: what should we do for protected and internal visibility?
   // For variables, is internal different from hidden?
-  bool isHidden = Var->hasHiddenVisibility();
+  bool isHidden = GV->hasHiddenVisibility();
 
   TLSModel::Model Model;
   if (isPIC && !isPIE) {
@@ -154,7 +130,7 @@ TLSModel::Model TargetMachine::getTLSModel(const GlobalValue *GV) const {
   }
 
   // If the user specified a more specific model, use that.
-  TLSModel::Model SelectedModel = getSelectedTLSModel(Var);
+  TLSModel::Model SelectedModel = getSelectedTLSModel(GV);
   if (SelectedModel > Model)
     return SelectedModel;
 
@@ -174,28 +150,22 @@ void TargetMachine::setOptLevel(CodeGenOpt::Level Level) const {
     CodeGenInfo->setOptLevel(Level);
 }
 
-bool TargetMachine::getAsmVerbosityDefault() {
-  return AsmVerbosityDefault;
+TargetIRAnalysis TargetMachine::getTargetIRAnalysis() {
+  return TargetIRAnalysis(
+      [this](Function &) { return TargetTransformInfo(getDataLayout()); });
 }
 
-void TargetMachine::setAsmVerbosityDefault(bool V) {
-  AsmVerbosityDefault = V;
-}
+static bool canUsePrivateLabel(const MCAsmInfo &AsmInfo,
+                               const MCSection &Section) {
+  if (!AsmInfo.isSectionAtomizableBySymbols(Section))
+    return true;
 
-bool TargetMachine::getFunctionSections() {
-  return FunctionSections;
-}
+  // If it is not dead stripped, it is safe to use private labels.
+  const MCSectionMachO &SMO = cast<MCSectionMachO>(Section);
+  if (SMO.hasAttribute(MachO::S_ATTR_NO_DEAD_STRIP))
+    return true;
 
-bool TargetMachine::getDataSections() {
-  return DataSections;
-}
-
-void TargetMachine::setFunctionSections(bool V) {
-  FunctionSections = V;
-}
-
-void TargetMachine::setDataSections(bool V) {
-  DataSections = V;
+  return false;
 }
 
 void TargetMachine::getNameWithPrefix(SmallVectorImpl<char> &Name,
@@ -208,17 +178,15 @@ void TargetMachine::getNameWithPrefix(SmallVectorImpl<char> &Name,
     return;
   }
   SectionKind GVKind = TargetLoweringObjectFile::getKindForGlobal(GV, *this);
-  const TargetLoweringObjectFile &TLOF =
-      getTargetLowering()->getObjFileLowering();
-  const MCSection *TheSection = TLOF.SectionForGlobal(GV, GVKind, Mang, *this);
-  bool CannotUsePrivateLabel = TLOF.isSectionAtomizableBySymbols(*TheSection);
-  Mang.getNameWithPrefix(Name, GV, CannotUsePrivateLabel);
+  const TargetLoweringObjectFile *TLOF = getObjFileLowering();
+  const MCSection *TheSection = TLOF->SectionForGlobal(GV, GVKind, Mang, *this);
+  bool CannotUsePrivateLabel = !canUsePrivateLabel(*AsmInfo, *TheSection);
+  TLOF->getNameWithPrefix(Name, GV, CannotUsePrivateLabel, Mang, *this);
 }
 
 MCSymbol *TargetMachine::getSymbol(const GlobalValue *GV, Mangler &Mang) const {
-  SmallString<60> NameStr;
+  SmallString<128> NameStr;
   getNameWithPrefix(NameStr, GV, Mang);
-  const TargetLoweringObjectFile &TLOF =
-      getTargetLowering()->getObjFileLowering();
-  return TLOF.getContext().GetOrCreateSymbol(NameStr.str());
+  const TargetLoweringObjectFile *TLOF = getObjFileLowering();
+  return TLOF->getContext().getOrCreateSymbol(NameStr);
 }

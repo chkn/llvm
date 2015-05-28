@@ -24,7 +24,7 @@ class X86_64MachORelocationInfo : public MCRelocationInfo {
 public:
   X86_64MachORelocationInfo(MCContext &Ctx) : MCRelocationInfo(Ctx) {}
 
-  const MCExpr *createExprForRelocation(RelocationRef Rel) {
+  const MCExpr *createExprForRelocation(RelocationRef Rel) override {
     const MachOObjectFile *Obj = cast<MachOObjectFile>(Rel.getObjectFile());
 
     uint64_t RelType; Rel.getType(RelType);
@@ -36,11 +36,11 @@ public:
     any_relocation_info RE = Obj->getRelocation(Rel.getRawDataRefImpl());
     bool isPCRel = Obj->getAnyRelocationPCRel(RE);
 
-    MCSymbol *Sym = Ctx.GetOrCreateSymbol(SymName);
+    MCSymbol *Sym = Ctx.getOrCreateSymbol(SymName);
     // FIXME: check that the value is actually the same.
-    if (Sym->isVariable() == false)
+    if (!Sym->isVariable())
       Sym->setVariableValue(MCConstantExpr::Create(SymAddr, Ctx));
-    const MCExpr *Expr = 0;
+    const MCExpr *Expr = nullptr;
 
     switch(RelType) {
     case X86_64_RELOC_TLV:
@@ -92,8 +92,8 @@ public:
         StringRef RSymName;
         RSymI->getName(RSymName);
 
-        MCSymbol *RSym = Ctx.GetOrCreateSymbol(RSymName);
-        if (RSym->isVariable() == false)
+        MCSymbol *RSym = Ctx.getOrCreateSymbol(RSymName);
+        if (!RSym->isVariable())
           RSym->setVariableValue(MCConstantExpr::Create(RSymAddr, Ctx));
 
         const MCExpr *RHS = MCSymbolRefExpr::Create(RSym, Ctx);

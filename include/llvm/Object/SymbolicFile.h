@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_OBJECT_SYMBOLIC_FILE_H
-#define LLVM_OBJECT_SYMBOLIC_FILE_H
+#ifndef LLVM_OBJECT_SYMBOLICFILE_H
+#define LLVM_OBJECT_SYMBOLICFILE_H
 
 #include "llvm/Object/Binary.h"
 
@@ -35,13 +35,19 @@ inline bool operator==(const DataRefImpl &a, const DataRefImpl &b) {
   return std::memcmp(&a, &b, sizeof(DataRefImpl)) == 0;
 }
 
+inline bool operator!=(const DataRefImpl &a, const DataRefImpl &b) {
+  return !operator==(a, b);
+}
+
 inline bool operator<(const DataRefImpl &a, const DataRefImpl &b) {
   // Check bitwise identical. This is the only legal way to compare a union w/o
   // knowing which member is in use.
   return std::memcmp(&a, &b, sizeof(DataRefImpl)) < 0;
 }
 
-template <class content_type> class content_iterator {
+template <class content_type>
+class content_iterator
+    : public std::iterator<std::forward_iterator_tag, content_type> {
   content_type Current;
 
 public:
@@ -75,18 +81,22 @@ class BasicSymbolRef {
 
 public:
   // FIXME: should we add a SF_Text?
-  enum Flags LLVM_ENUM_INT_TYPE(unsigned) {
+  enum Flags : unsigned {
     SF_None = 0,
     SF_Undefined = 1U << 0,      // Symbol is defined in another object file
     SF_Global = 1U << 1,         // Global symbol
     SF_Weak = 1U << 2,           // Weak symbol
     SF_Absolute = 1U << 3,       // Absolute symbol
     SF_Common = 1U << 4,         // Symbol has common linkage
-    SF_FormatSpecific = 1U << 5  // Specific to the object file format
+    SF_Indirect = 1U << 5,       // Symbol is an alias to another symbol
+    SF_Exported = 1U << 6,       // Symbol is visible to other DSOs
+    SF_FormatSpecific = 1U << 7, // Specific to the object file format
                                  // (e.g. section symbols)
+    SF_Thumb = 1U << 8,          // Thumb symbol in a 32-bit ARM binary
+    SF_Hidden = 1U << 9,         // Symbol has hidden visibility
   };
 
-  BasicSymbolRef() : OwningObject(NULL) { }
+  BasicSymbolRef() : OwningObject(nullptr) { }
   BasicSymbolRef(DataRefImpl SymbolP, const SymbolicFile *Owner);
 
   bool operator==(const BasicSymbolRef &Other) const;
@@ -94,7 +104,7 @@ public:
 
   void moveNext();
 
-  error_code printName(raw_ostream &OS) const;
+  std::error_code printName(raw_ostream &OS) const;
 
   /// Get symbol flags (bitwise OR of SymbolRef::Flags)
   uint32_t getFlags() const;
@@ -109,14 +119,14 @@ const uint64_t UnknownAddressOrSize = ~0ULL;
 
 class SymbolicFile : public Binary {
 public:
-  virtual ~SymbolicFile();
-  SymbolicFile(unsigned int Type, MemoryBuffer *Source, bool BufferOwned);
+  ~SymbolicFile() override;
+  SymbolicFile(unsigned int Type, MemoryBufferRef Source);
 
   // virtual interface.
   virtual void moveSymbolNext(DataRefImpl &Symb) const = 0;
 
-  virtual error_code printSymbolName(raw_ostream &OS,
-                                     DataRefImpl Symb) const = 0;
+  virtual std::error_code printSymbolName(raw_ostream &OS,
+                                          DataRefImpl Symb) const = 0;
 
   virtual uint32_t getSymbolFlags(DataRefImpl Symb) const = 0;
 
@@ -131,21 +141,22 @@ public:
   basic_symbol_iterator symbol_end() const {
     return symbol_end_impl();
   }
+  typedef iterator_range<basic_symbol_iterator> basic_symbol_iterator_range;
+  basic_symbol_iterator_range symbols() const {
+    return basic_symbol_iterator_range(symbol_begin(), symbol_end());
+  }
 
   // construction aux.
-  static ErrorOr<SymbolicFile *> createIRObjectFile(MemoryBuffer *Object,
-                                                    LLVMContext &Context,
-                                                    bool BufferOwned = true);
+  static ErrorOr<std::unique_ptr<SymbolicFile>>
+  createSymbolicFile(MemoryBufferRef Object, sys::fs::file_magic Type,
+                     LLVMContext *Context);
 
-  static ErrorOr<SymbolicFile *> createSymbolicFile(MemoryBuffer *Object,
-                                                    bool BufferOwned,
-                                                    sys::fs::file_magic Type,
-                                                    LLVMContext *Context);
-
-  static ErrorOr<SymbolicFile *> createSymbolicFile(MemoryBuffer *Object) {
-    return createSymbolicFile(Object, true, sys::fs::file_magic::unknown, 0);
+  static ErrorOr<std::unique_ptr<SymbolicFile>>
+  createSymbolicFile(MemoryBufferRef Object) {
+    return createSymbolicFile(Object, sys::fs::file_magic::unknown, nullptr);
   }
-  static ErrorOr<SymbolicFile *> createSymbolicFile(StringRef ObjectPath);
+  static ErrorOr<OwningBinary<SymbolicFile>>
+  createSymbolicFile(StringRef ObjectPath);
 
   static inline bool classof(const Binary *v) {
     return v->isSymbolic();
@@ -168,7 +179,7 @@ inline void BasicSymbolRef::moveNext() {
   return OwningObject->moveSymbolNext(SymbolPimpl);
 }
 
-inline error_code BasicSymbolRef::printName(raw_ostream &OS) const {
+inline std::error_code BasicSymbolRef::printName(raw_ostream &OS) const {
   return OwningObject->printSymbolName(OS, SymbolPimpl);
 }
 

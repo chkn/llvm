@@ -12,6 +12,9 @@ add_llvm_library(LLVMObject
   MachOUniversal.cpp
   Object.cpp
   ObjectFile.cpp
+  RecordStreamer.cpp
   SymbolicFile.cpp
-  YAML.cpp
+
+  ADDITIONAL_HEADER_DIRS
+  ${LLVM_MAIN_INCLUDE_DIR}/llvm/Object
   )

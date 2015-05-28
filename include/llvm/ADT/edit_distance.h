@@ -17,8 +17,8 @@
 #define LLVM_ADT_EDIT_DISTANCE_H
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/OwningPtr.h"
 #include <algorithm>
+#include <memory>
 
 namespace llvm {
 
@@ -50,14 +50,14 @@ unsigned ComputeEditDistance(ArrayRef<T> FromArray, ArrayRef<T> ToArray,
   //   http://en.wikipedia.org/wiki/Levenshtein_distance
   //
   // Although the algorithm is typically described using an m x n
-  // array, only two rows are used at a time, so this implemenation
+  // array, only two rows are used at a time, so this implementation
   // just keeps two separate vectors for those two rows.
   typename ArrayRef<T>::size_type m = FromArray.size();
   typename ArrayRef<T>::size_type n = ToArray.size();
 
   const unsigned SmallBufferSize = 64;
   unsigned SmallBuffer[SmallBufferSize];
-  llvm::OwningArrayPtr<unsigned> Allocated;
+  std::unique_ptr<unsigned[]> Allocated;
   unsigned *Previous = SmallBuffer;
   if (2*(n + 1) > SmallBufferSize) {
     Previous = new unsigned [2*(n+1)];

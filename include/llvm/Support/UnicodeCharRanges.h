@@ -21,6 +21,8 @@
 namespace llvm {
 namespace sys {
 
+#define DEBUG_TYPE "unicode"
+
 /// \brief Represents a closed range of Unicode code points [Lower, Upper].
 struct UnicodeCharRange {
   uint32_t Lower;
@@ -48,9 +50,13 @@ public:
   /// the UnicodeCharSet instance, and should not change. Array is validated by
   /// the constructor, so it makes sense to create as few UnicodeCharSet
   /// instances per each array of ranges, as possible.
+#ifdef NDEBUG
+  LLVM_CONSTEXPR UnicodeCharSet(CharRanges Ranges) : Ranges(Ranges) {}
+#else
   UnicodeCharSet(CharRanges Ranges) : Ranges(Ranges) {
     assert(rangesAreValid());
   }
+#endif
 
   /// \brief Returns true if the character set contains the Unicode code point
   /// \p C.
@@ -87,6 +93,8 @@ private:
 
   const CharRanges Ranges;
 };
+
+#undef DEBUG_TYPE // "unicode"
 
 } // namespace sys
 } // namespace llvm

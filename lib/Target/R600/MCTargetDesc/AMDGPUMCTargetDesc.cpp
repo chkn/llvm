@@ -15,7 +15,9 @@
 #include "AMDGPUMCTargetDesc.h"
 #include "AMDGPUMCAsmInfo.h"
 #include "InstPrinter/AMDGPUInstPrinter.h"
+#include "SIDefines.h"
 #include "llvm/MC/MCCodeGenInfo.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
@@ -23,6 +25,8 @@
 #include "llvm/MC/MachineLocation.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TargetRegistry.h"
+
+using namespace llvm;
 
 #define GET_INSTRINFO_MC_DESC
 #include "AMDGPUGenInstrInfo.inc"
@@ -32,8 +36,6 @@
 
 #define GET_REGINFO_MC_DESC
 #include "AMDGPUGenRegisterInfo.inc"
-
-using namespace llvm;
 
 static MCInstrInfo *createAMDGPUMCInstrInfo() {
   MCInstrInfo *X = new MCInstrInfo();
@@ -58,57 +60,31 @@ static MCCodeGenInfo *createAMDGPUMCCodeGenInfo(StringRef TT, Reloc::Model RM,
                                                CodeModel::Model CM,
                                                CodeGenOpt::Level OL) {
   MCCodeGenInfo *X = new MCCodeGenInfo();
-  X->InitMCCodeGenInfo(RM, CM, OL);
+  X->initMCCodeGenInfo(RM, CM, OL);
   return X;
 }
 
-static MCInstPrinter *createAMDGPUMCInstPrinter(const Target &T,
+static MCInstPrinter *createAMDGPUMCInstPrinter(const Triple &T,
                                                 unsigned SyntaxVariant,
                                                 const MCAsmInfo &MAI,
                                                 const MCInstrInfo &MII,
-                                                const MCRegisterInfo &MRI,
-                                                const MCSubtargetInfo &STI) {
+                                                const MCRegisterInfo &MRI) {
   return new AMDGPUInstPrinter(MAI, MII, MRI);
 }
 
-static MCCodeEmitter *createAMDGPUMCCodeEmitter(const MCInstrInfo &MCII,
-                                                const MCRegisterInfo &MRI,
-                                                const MCSubtargetInfo &STI,
-                                                MCContext &Ctx) {
-  if (STI.getFeatureBits() & AMDGPU::Feature64BitPtr) {
-    return createSIMCCodeEmitter(MCII, MRI, STI, Ctx);
-  } else {
-    return createR600MCCodeEmitter(MCII, MRI, STI);
-  }
-}
-
-static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
-                                    MCContext &Ctx, MCAsmBackend &MAB,
-                                    raw_ostream &_OS,
-                                    MCCodeEmitter *_Emitter,
-                                    const MCSubtargetInfo &STI,
-                                    bool RelaxAll,
-                                    bool NoExecStack) {
-  return createELFStreamer(Ctx, MAB, _OS, _Emitter, false, false);
-}
-
 extern "C" void LLVMInitializeR600TargetMC() {
+  for (Target *T : {&TheAMDGPUTarget, &TheGCNTarget}) {
+    RegisterMCAsmInfo<AMDGPUMCAsmInfo> X(*T);
 
-  RegisterMCAsmInfo<AMDGPUMCAsmInfo> Y(TheAMDGPUTarget);
+    TargetRegistry::RegisterMCCodeGenInfo(*T, createAMDGPUMCCodeGenInfo);
+    TargetRegistry::RegisterMCInstrInfo(*T, createAMDGPUMCInstrInfo);
+    TargetRegistry::RegisterMCRegInfo(*T, createAMDGPUMCRegisterInfo);
+    TargetRegistry::RegisterMCSubtargetInfo(*T, createAMDGPUMCSubtargetInfo);
+    TargetRegistry::RegisterMCInstPrinter(*T, createAMDGPUMCInstPrinter);
+    TargetRegistry::RegisterMCAsmBackend(*T, createAMDGPUAsmBackend);
+  }
 
-  TargetRegistry::RegisterMCCodeGenInfo(TheAMDGPUTarget, createAMDGPUMCCodeGenInfo);
-
-  TargetRegistry::RegisterMCInstrInfo(TheAMDGPUTarget, createAMDGPUMCInstrInfo);
-
-  TargetRegistry::RegisterMCRegInfo(TheAMDGPUTarget, createAMDGPUMCRegisterInfo);
-
-  TargetRegistry::RegisterMCSubtargetInfo(TheAMDGPUTarget, createAMDGPUMCSubtargetInfo);
-
-  TargetRegistry::RegisterMCInstPrinter(TheAMDGPUTarget, createAMDGPUMCInstPrinter);
-
-  TargetRegistry::RegisterMCCodeEmitter(TheAMDGPUTarget, createAMDGPUMCCodeEmitter);
-
-  TargetRegistry::RegisterMCAsmBackend(TheAMDGPUTarget, createAMDGPUAsmBackend);
-
-  TargetRegistry::RegisterMCObjectStreamer(TheAMDGPUTarget, createMCStreamer);
+  TargetRegistry::RegisterMCCodeEmitter(TheAMDGPUTarget,
+                                        createR600MCCodeEmitter);
+  TargetRegistry::RegisterMCCodeEmitter(TheGCNTarget, createSIMCCodeEmitter);
 }

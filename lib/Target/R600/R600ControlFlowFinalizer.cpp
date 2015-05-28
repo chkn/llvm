@@ -12,9 +12,9 @@
 /// computing their address on the fly ; it also sets STACK_SIZE info.
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "r600cf"
 #include "llvm/Support/Debug.h"
 #include "AMDGPU.h"
+#include "AMDGPUSubtarget.h"
 #include "R600Defines.h"
 #include "R600InstrInfo.h"
 #include "R600MachineFunctionInfo.h"
@@ -25,6 +25,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "r600cf"
 
 namespace {
 
@@ -37,14 +39,14 @@ struct CFStack {
     FIRST_NON_WQM_PUSH_W_FULL_ENTRY = 3
   };
 
-  const AMDGPUSubtarget &ST;
+  const AMDGPUSubtarget *ST;
   std::vector<StackItem> BranchStack;
   std::vector<StackItem> LoopStack;
   unsigned MaxStackSize;
   unsigned CurrentEntries;
   unsigned CurrentSubEntries;
 
-  CFStack(const AMDGPUSubtarget &st, unsigned ShaderType) : ST(st),
+  CFStack(const AMDGPUSubtarget *st, unsigned ShaderType) : ST(st),
       // We need to reserve a stack entry for CALL_FS in vertex shaders.
       MaxStackSize(ShaderType == ShaderType::VERTEX ? 1 : 0),
       CurrentEntries(0), CurrentSubEntries(0) { }
@@ -74,11 +76,11 @@ bool CFStack::branchStackContains(CFStack::StackItem Item) {
 }
 
 bool CFStack::requiresWorkAroundForInst(unsigned Opcode) {
-  if (Opcode == AMDGPU::CF_ALU_PUSH_BEFORE && ST.hasCaymanISA() &&
+  if (Opcode == AMDGPU::CF_ALU_PUSH_BEFORE && ST->hasCaymanISA() &&
       getLoopDepth() > 1)
     return true;
 
-  if (!ST.hasCFAluBug())
+  if (!ST->hasCFAluBug())
     return false;
 
   switch(Opcode) {
@@ -89,7 +91,7 @@ bool CFStack::requiresWorkAroundForInst(unsigned Opcode) {
   case AMDGPU::CF_ALU_CONTINUE:
     if (CurrentSubEntries == 0)
       return false;
-    if (ST.getWavefrontSize() == 64) {
+    if (ST->getWavefrontSize() == 64) {
       // We are being conservative here.  We only require this work-around if
       // CurrentSubEntries > 3 &&
       // (CurrentSubEntries % 4 == 3 || CurrentSubEntries % 4 == 0)
@@ -100,7 +102,7 @@ bool CFStack::requiresWorkAroundForInst(unsigned Opcode) {
       // resources without any problems.
       return CurrentSubEntries > 3;
     } else {
-      assert(ST.getWavefrontSize() == 32);
+      assert(ST->getWavefrontSize() == 32);
       // We are being conservative here.  We only require the work-around if
       // CurrentSubEntries > 7 &&
       // (CurrentSubEntries % 8 == 7 || CurrentSubEntries % 8 == 0)
@@ -116,8 +118,8 @@ unsigned CFStack::getSubEntrySize(CFStack::StackItem Item) {
   default:
     return 0;
   case CFStack::FIRST_NON_WQM_PUSH:
-  assert(!ST.hasCaymanISA());
-  if (ST.getGeneration() <= AMDGPUSubtarget::R700) {
+  assert(!ST->hasCaymanISA());
+  if (ST->getGeneration() <= AMDGPUSubtarget::R700) {
     // +1 For the push operation.
     // +2 Extra space required.
     return 3;
@@ -130,7 +132,7 @@ unsigned CFStack::getSubEntrySize(CFStack::StackItem Item) {
     return 2;
   }
   case CFStack::FIRST_NON_WQM_PUSH_W_FULL_ENTRY:
-    assert(ST.getGeneration() >= AMDGPUSubtarget::EVERGREEN);
+    assert(ST->getGeneration() >= AMDGPUSubtarget::EVERGREEN);
     // +1 For the push operation.
     // +1 Extra space required.
     return 2;
@@ -151,13 +153,14 @@ void CFStack::pushBranch(unsigned Opcode, bool isWQM) {
   case AMDGPU::CF_PUSH_EG:
   case AMDGPU::CF_ALU_PUSH_BEFORE:
     if (!isWQM) {
-      if (!ST.hasCaymanISA() && !branchStackContains(CFStack::FIRST_NON_WQM_PUSH))
+      if (!ST->hasCaymanISA() &&
+          !branchStackContains(CFStack::FIRST_NON_WQM_PUSH))
         Item = CFStack::FIRST_NON_WQM_PUSH;  // May not be required on Evergreen/NI
                                              // See comment in
                                              // CFStack::getSubEntrySize()
       else if (CurrentEntries > 0 &&
-               ST.getGeneration() > AMDGPUSubtarget::EVERGREEN &&
-               !ST.hasCaymanISA() &&
+               ST->getGeneration() > AMDGPUSubtarget::EVERGREEN &&
+               !ST->hasCaymanISA() &&
                !branchStackContains(CFStack::FIRST_NON_WQM_PUSH_W_FULL_ENTRY))
         Item = CFStack::FIRST_NON_WQM_PUSH_W_FULL_ENTRY;
       else
@@ -217,7 +220,7 @@ private:
   const R600InstrInfo *TII;
   const R600RegisterInfo *TRI;
   unsigned MaxFetchInst;
-  const AMDGPUSubtarget &ST;
+  const AMDGPUSubtarget *ST;
 
   bool IsTrivialInst(MachineInstr *MI) const {
     switch (MI->getOpcode()) {
@@ -231,7 +234,7 @@ private:
 
   const MCInstrDesc &getHWInstrDesc(ControlFlowInstruction CFI) const {
     unsigned Opcode = 0;
-    bool isEg = (ST.getGeneration() >= AMDGPUSubtarget::EVERGREEN);
+    bool isEg = (ST->getGeneration() >= AMDGPUSubtarget::EVERGREEN);
     switch (CFI) {
     case CF_TC:
       Opcode = isEg ? AMDGPU::CF_TC_EG : AMDGPU::CF_TC_R600;
@@ -264,7 +267,7 @@ private:
       Opcode = isEg ? AMDGPU::POP_EG : AMDGPU::POP_R600;
       break;
     case CF_END:
-      if (ST.hasCaymanISA()) {
+      if (ST->hasCaymanISA()) {
         Opcode = AMDGPU::CF_END_CM;
         break;
       }
@@ -334,7 +337,7 @@ private:
         getHWInstrDesc(IsTex?CF_TC:CF_VC))
         .addImm(0) // ADDR
         .addImm(AluInstCount - 1); // COUNT
-    return ClauseFile(MIb, ClauseContent);
+    return ClauseFile(MIb, std::move(ClauseContent));
   }
 
   void getLiteral(MachineInstr *MI, std::vector<int64_t> &Lits) const {
@@ -424,7 +427,7 @@ private:
     }
     assert(ClauseContent.size() < 128 && "ALU clause is too big");
     ClauseHead->getOperand(7).setImm(ClauseContent.size() - 1);
-    return ClauseFile(ClauseHead, ClauseContent);
+    return ClauseFile(ClauseHead, std::move(ClauseContent));
   }
 
   void
@@ -457,36 +460,32 @@ private:
   void CounterPropagateAddr(MachineInstr *MI, unsigned Addr) const {
     MI->getOperand(0).setImm(Addr + MI->getOperand(0).getImm());
   }
-  void CounterPropagateAddr(std::set<MachineInstr *> MIs, unsigned Addr)
-      const {
-    for (std::set<MachineInstr *>::iterator It = MIs.begin(), E = MIs.end();
-        It != E; ++It) {
-      MachineInstr *MI = *It;
+  void CounterPropagateAddr(const std::set<MachineInstr *> &MIs,
+                            unsigned Addr) const {
+    for (MachineInstr *MI : MIs) {
       CounterPropagateAddr(MI, Addr);
     }
   }
 
 public:
-  R600ControlFlowFinalizer(TargetMachine &tm) : MachineFunctionPass(ID),
-    TII (0), TRI(0),
-    ST(tm.getSubtarget<AMDGPUSubtarget>()) {
-      const AMDGPUSubtarget &ST = tm.getSubtarget<AMDGPUSubtarget>();
-      MaxFetchInst = ST.getTexVTXClauseSize();
-  }
+  R600ControlFlowFinalizer(TargetMachine &tm)
+      : MachineFunctionPass(ID), TII(nullptr), TRI(nullptr), ST(nullptr) {}
 
-  virtual bool runOnMachineFunction(MachineFunction &MF) {
-    TII=static_cast<const R600InstrInfo *>(MF.getTarget().getInstrInfo());
-    TRI=static_cast<const R600RegisterInfo *>(MF.getTarget().getRegisterInfo());
+  bool runOnMachineFunction(MachineFunction &MF) override {
+    ST = &MF.getSubtarget<AMDGPUSubtarget>();
+    MaxFetchInst = ST->getTexVTXClauseSize();
+    TII = static_cast<const R600InstrInfo *>(ST->getInstrInfo());
+    TRI = static_cast<const R600RegisterInfo *>(ST->getRegisterInfo());
     R600MachineFunctionInfo *MFI = MF.getInfo<R600MachineFunctionInfo>();
 
-    CFStack CFStack(ST, MFI->ShaderType);
+    CFStack CFStack(ST, MFI->getShaderType());
     for (MachineFunction::iterator MB = MF.begin(), ME = MF.end(); MB != ME;
         ++MB) {
       MachineBasicBlock &MBB = *MB;
       unsigned CfCount = 0;
       std::vector<std::pair<unsigned, std::set<MachineInstr *> > > LoopStack;
       std::vector<MachineInstr * > IfThenElseStack;
-      if (MFI->ShaderType == 1) {
+      if (MFI->getShaderType() == ShaderType::VERTEX) {
         BuildMI(MBB, MBB.begin(), MBB.findDebugLoc(MBB.begin()),
             getHWInstrDesc(CF_CALL_FS));
         CfCount++;
@@ -501,13 +500,13 @@ public:
           DEBUG(dbgs() << CfCount << ":"; I->dump(););
           FetchClauses.push_back(MakeFetchClause(MBB, I));
           CfCount++;
-          LastAlu.back() = 0;
+          LastAlu.back() = nullptr;
           continue;
         }
 
         MachineBasicBlock::iterator MI = I;
         if (MI->getOpcode() != AMDGPU::ENDIF)
-          LastAlu.back() = 0;
+          LastAlu.back() = nullptr;
         if (MI->getOpcode() == AMDGPU::CF_ALU)
           LastAlu.back() = MI;
         I++;
@@ -540,7 +539,7 @@ public:
           std::pair<unsigned, std::set<MachineInstr *> > Pair(CfCount,
               std::set<MachineInstr *>());
           Pair.second.insert(MIb);
-          LoopStack.push_back(Pair);
+          LoopStack.push_back(std::move(Pair));
           MI->eraseFromParent();
           CfCount++;
           break;
@@ -548,7 +547,7 @@ public:
         case AMDGPU::ENDLOOP: {
           CFStack.popLoop();
           std::pair<unsigned, std::set<MachineInstr *> > Pair =
-              LoopStack.back();
+              std::move(LoopStack.back());
           LoopStack.pop_back();
           CounterPropagateAddr(Pair.second, CfCount);
           BuildMI(MBB, MI, MBB.findDebugLoc(MI), getHWInstrDesc(CF_END_LOOP))
@@ -558,7 +557,7 @@ public:
           break;
         }
         case AMDGPU::IF_PREDICATE_SET: {
-          LastAlu.push_back(0);
+          LastAlu.push_back(nullptr);
           MachineInstr *MIb = BuildMI(MBB, MI, MBB.findDebugLoc(MI),
               getHWInstrDesc(CF_JUMP))
               .addImm(0)
@@ -665,7 +664,7 @@ public:
     return false;
   }
 
-  const char *getPassName() const {
+  const char *getPassName() const override {
     return "R600 Control Flow Finalizer Pass";
   }
 };

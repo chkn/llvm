@@ -17,17 +17,18 @@
 #include "llvm-c/Core.h"
 #include "llvm-c/ExecutionEngine.h"
 #include "llvm-c/Target.h"
-#include "llvm-c/Transforms/Scalar.h"
 #include "llvm-c/Transforms/PassManagerBuilder.h"
+#include "llvm-c/Transforms/Scalar.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/Host.h"
 #include "gtest/gtest.h"
-#include "llvm/Support/Debug.h"
 
 using namespace llvm;
 
 static bool didCallAllocateCodeSection;
 static bool didAllocateCompactUnwindSection;
+static bool didCallYield;
 
 static uint8_t *roundTripAllocateCodeSection(void *object, uintptr_t size,
                                              unsigned alignment,
@@ -64,6 +65,10 @@ static void roundTripDestroy(void *object) {
   delete static_cast<SectionMemoryManager*>(object);
 }
 
+static void yield(LLVMContextRef, void *) {
+  didCallYield = true;
+}
+
 namespace {
 
 // memory manager to test reserve allocation space callback
@@ -80,13 +85,11 @@ public:
     ReservedCodeSize(0), UsedCodeSize(0), ReservedDataSizeRO(0), 
     UsedDataSizeRO(0), ReservedDataSizeRW(0), UsedDataSizeRW(0) {    
   }
-  
-  virtual bool needsToReserveAllocationSpace() {
-    return true;
-  }
 
-  virtual void reserveAllocationSpace(
-      uintptr_t CodeSize, uintptr_t DataSizeRO, uintptr_t DataSizeRW) {
+  bool needsToReserveAllocationSpace() override { return true; }
+
+  void reserveAllocationSpace(uintptr_t CodeSize, uintptr_t DataSizeRO,
+                              uintptr_t DataSizeRW) override {
     ReservedCodeSize = CodeSize;
     ReservedDataSizeRO = DataSizeRO;
     ReservedDataSizeRW = DataSizeRW;
@@ -98,15 +101,17 @@ public:
     *UsedSize = AlignedBegin + AlignedSize;
   }
 
-  virtual uint8_t* allocateDataSection(uintptr_t Size, unsigned Alignment,
-      unsigned SectionID, StringRef SectionName, bool IsReadOnly) {
+  uint8_t *allocateDataSection(uintptr_t Size, unsigned Alignment,
+                               unsigned SectionID, StringRef SectionName,
+                               bool IsReadOnly) override {
     useSpace(IsReadOnly ? &UsedDataSizeRO : &UsedDataSizeRW, Size, Alignment);
     return SectionMemoryManager::allocateDataSection(Size, Alignment, 
       SectionID, SectionName, IsReadOnly);
   }
 
-  uint8_t* allocateCodeSection(uintptr_t Size, unsigned Alignment, 
-      unsigned SectionID, StringRef SectionName) {
+  uint8_t *allocateCodeSection(uintptr_t Size, unsigned Alignment,
+                               unsigned SectionID,
+                               StringRef SectionName) override {
     useSpace(&UsedCodeSize, Size, Alignment);
     return SectionMemoryManager::allocateCodeSection(Size, Alignment, 
       SectionID, SectionName);
@@ -134,19 +139,20 @@ protected:
 
     // The operating systems below are known to be sufficiently incompatible
     // that they will fail the MCJIT C API tests.
-    UnsupportedOSs.push_back(Triple::Cygwin);
+    UnsupportedEnvironments.push_back(Triple::Cygnus);
   }
-  
-  virtual void SetUp() {
+
+  void SetUp() override {
     didCallAllocateCodeSection = false;
     didAllocateCompactUnwindSection = false;
-    Module = 0;
-    Function = 0;
-    Engine = 0;
-    Error = 0;
+    didCallYield = false;
+    Module = nullptr;
+    Function = nullptr;
+    Engine = nullptr;
+    Error = nullptr;
   }
-  
-  virtual void TearDown() {
+
+  void TearDown() override {
     if (Engine)
       LLVMDisposeExecutionEngine(Engine);
     else if (Module)
@@ -158,8 +164,8 @@ protected:
     
     LLVMSetTarget(Module, HostTriple.c_str());
     
-    Function = LLVMAddFunction(
-      Module, "simple_function", LLVMFunctionType(LLVMInt32Type(), 0, 0, 0));
+    Function = LLVMAddFunction(Module, "simple_function",
+                               LLVMFunctionType(LLVMInt32Type(), nullptr,0, 0));
     LLVMSetFunctionCallConv(Function, LLVMCCallConv);
     
     LLVMBasicBlockRef entry = LLVMAppendBasicBlock(Function, "entry");
@@ -184,8 +190,8 @@ protected:
       LLVMFunctionType(LLVMVoidType(), stackmapParamTypes, 2, 1));
     LLVMSetLinkage(stackmap, LLVMExternalLinkage);
     
-    Function = LLVMAddFunction(
-      Module, "simple_function", LLVMFunctionType(LLVMInt32Type(), 0, 0, 0));
+    Function = LLVMAddFunction(Module, "simple_function",
+                              LLVMFunctionType(LLVMInt32Type(), nullptr, 0, 0));
     
     LLVMBasicBlockRef entry = LLVMAppendBasicBlock(Function, "entry");
     LLVMBuilderRef builder = LLVMCreateBuilder();
@@ -213,8 +219,8 @@ protected:
     LLVMSetInitializer(GlobalVar, LLVMConstInt(LLVMInt32Type(), 42, 0));
     
     {
-        Function = LLVMAddFunction(
-          Module, "getGlobal", LLVMFunctionType(LLVMInt32Type(), 0, 0, 0));
+        Function = LLVMAddFunction(Module, "getGlobal",
+                              LLVMFunctionType(LLVMInt32Type(), nullptr, 0, 0));
         LLVMSetFunctionCallConv(Function, LLVMCCallConv);
         
         LLVMBasicBlockRef Entry = LLVMAppendBasicBlock(Function, "entry");
@@ -341,6 +347,38 @@ TEST_F(MCJITCAPITest, simple_function) {
   EXPECT_EQ(42, functionPointer.usable());
 }
 
+TEST_F(MCJITCAPITest, gva) {
+  SKIP_UNSUPPORTED_PLATFORM;
+
+  Module = LLVMModuleCreateWithName("simple_module");
+  LLVMSetTarget(Module, HostTriple.c_str());
+  LLVMValueRef GlobalVar = LLVMAddGlobal(Module, LLVMInt32Type(), "simple_value");
+  LLVMSetInitializer(GlobalVar, LLVMConstInt(LLVMInt32Type(), 42, 0));
+
+  buildMCJITOptions();
+  buildMCJITEngine();
+  buildAndRunPasses();
+
+  uint64_t raw = LLVMGetGlobalValueAddress(Engine, "simple_value");
+  int32_t *usable  = (int32_t *) raw;
+
+  EXPECT_EQ(42, *usable);
+}
+
+TEST_F(MCJITCAPITest, gfa) {
+  SKIP_UNSUPPORTED_PLATFORM;
+
+  buildSimpleFunction();
+  buildMCJITOptions();
+  buildMCJITEngine();
+  buildAndRunPasses();
+
+  uint64_t raw = LLVMGetFunctionAddress(Engine, "simple_function");
+  int (*usable)() = (int (*)()) raw;
+
+  EXPECT_EQ(42, usable());
+}
+
 TEST_F(MCJITCAPITest, custom_memory_manager) {
   SKIP_UNSUPPORTED_PLATFORM;
   
@@ -427,3 +465,24 @@ TEST_F(MCJITCAPITest, reserve_allocation_space) {
   EXPECT_TRUE(MM->UsedCodeSize > 0); 
   EXPECT_TRUE(MM->UsedDataSizeRW > 0);
 }
+
+TEST_F(MCJITCAPITest, yield) {
+  SKIP_UNSUPPORTED_PLATFORM;
+
+  buildSimpleFunction();
+  buildMCJITOptions();
+  buildMCJITEngine();
+  LLVMContextRef C = LLVMGetGlobalContext();
+  LLVMContextSetYieldCallback(C, yield, nullptr);
+  buildAndRunPasses();
+
+  union {
+    void *raw;
+    int (*usable)();
+  } functionPointer;
+  functionPointer.raw = LLVMGetPointerToGlobal(Engine, Function);
+
+  EXPECT_EQ(42, functionPointer.usable());
+  EXPECT_TRUE(didCallYield);
+}
+

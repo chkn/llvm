@@ -30,7 +30,7 @@ namespace llvm {
   int DiffFilesWithTolerance(StringRef FileA,
                              StringRef FileB,
                              double AbsTol, double RelTol,
-                             std::string *Error = 0);
+                             std::string *Error = nullptr);
 
 
   /// FileRemover - This class is a simple object meant to be stack allocated.
@@ -51,7 +51,7 @@ namespace llvm {
     ~FileRemover() {
       if (DeleteIt) {
         // Ignore problems deleting the file.
-        sys::fs::remove(Filename.str());
+        sys::fs::remove(Filename);
       }
     }
 
@@ -61,7 +61,7 @@ namespace llvm {
     void setFile(const Twine& filename, bool deleteIt = true) {
       if (DeleteIt) {
         // Ignore problems deleting the file.
-        sys::fs::remove(Filename.str());
+        sys::fs::remove(Filename);
       }
 
       Filename.clear();

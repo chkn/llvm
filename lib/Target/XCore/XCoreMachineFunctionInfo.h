@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef XCOREMACHINEFUNCTIONINFO_H
-#define XCOREMACHINEFUNCTIONINFO_H
+#ifndef LLVM_LIB_TARGET_XCORE_XCOREMACHINEFUNCTIONINFO_H
+#define LLVM_LIB_TARGET_XCORE_XCOREMACHINEFUNCTIONINFO_H
 
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -37,7 +37,8 @@ class XCoreFunctionInfo : public MachineFunctionInfo {
   bool ReturnStackOffsetSet;
   int VarArgsFrameIndex;
   mutable int CachedEStackSize;
-  std::vector<std::pair<MCSymbol*, CalleeSavedInfo> > SpillLabels;
+  std::vector<std::pair<MachineBasicBlock::iterator, CalleeSavedInfo>>
+  SpillLabels;
 
 public:
   XCoreFunctionInfo() :
@@ -95,10 +96,11 @@ public:
 
   bool isLargeFrame(const MachineFunction &MF) const;
 
-  std::vector<std::pair<MCSymbol*, CalleeSavedInfo> > &getSpillLabels() {
+  std::vector<std::pair<MachineBasicBlock::iterator, CalleeSavedInfo>> &
+  getSpillLabels() {
     return SpillLabels;
   }
 };
 } // End llvm namespace
 
-#endif // XCOREMACHINEFUNCTIONINFO_H
+#endif

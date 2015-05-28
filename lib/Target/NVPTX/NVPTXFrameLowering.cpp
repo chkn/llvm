@@ -26,11 +26,15 @@
 
 using namespace llvm;
 
+NVPTXFrameLowering::NVPTXFrameLowering()
+    : TargetFrameLowering(TargetFrameLowering::StackGrowsUp, 8, 0) {}
+
 bool NVPTXFrameLowering::hasFP(const MachineFunction &MF) const { return true; }
 
-void NVPTXFrameLowering::emitPrologue(MachineFunction &MF) const {
+void NVPTXFrameLowering::emitPrologue(MachineFunction &MF,
+                                      MachineBasicBlock &MBB) const {
   if (MF.getFrameInfo()->hasStackObjects()) {
-    MachineBasicBlock &MBB = MF.front();
+    assert(&MF.front() == &MBB && "Shrink-wrapping not yet supported");
     // Insert "mov.u32 %SP, %Depot"
     MachineBasicBlock::iterator MBBI = MBB.begin();
     // This instruction really occurs before first instruction
@@ -41,19 +45,23 @@ void NVPTXFrameLowering::emitPrologue(MachineFunction &MF) const {
 
     // mov %SPL, %depot;
     // cvta.local %SP, %SPL;
-    if (is64bit) {
+    if (static_cast<const NVPTXTargetMachine &>(MF.getTarget()).is64Bit()) {
       unsigned LocalReg = MRI.createVirtualRegister(&NVPTX::Int64RegsRegClass);
-      MachineInstr *MI = BuildMI(
-          MBB, MBBI, dl, tm.getInstrInfo()->get(NVPTX::cvta_local_yes_64),
-          NVPTX::VRFrame).addReg(LocalReg);
-      BuildMI(MBB, MI, dl, tm.getInstrInfo()->get(NVPTX::MOV_DEPOT_ADDR_64),
+      MachineInstr *MI =
+          BuildMI(MBB, MBBI, dl, MF.getSubtarget().getInstrInfo()->get(
+                                     NVPTX::cvta_local_yes_64),
+                  NVPTX::VRFrame).addReg(LocalReg);
+      BuildMI(MBB, MI, dl,
+              MF.getSubtarget().getInstrInfo()->get(NVPTX::MOV_DEPOT_ADDR_64),
               LocalReg).addImm(MF.getFunctionNumber());
     } else {
       unsigned LocalReg = MRI.createVirtualRegister(&NVPTX::Int32RegsRegClass);
-      MachineInstr *MI = BuildMI(
-          MBB, MBBI, dl, tm.getInstrInfo()->get(NVPTX::cvta_local_yes),
-          NVPTX::VRFrame).addReg(LocalReg);
-      BuildMI(MBB, MI, dl, tm.getInstrInfo()->get(NVPTX::MOV_DEPOT_ADDR),
+      MachineInstr *MI =
+          BuildMI(MBB, MBBI, dl,
+                  MF.getSubtarget().getInstrInfo()->get(NVPTX::cvta_local_yes),
+                  NVPTX::VRFrame).addReg(LocalReg);
+      BuildMI(MBB, MI, dl,
+              MF.getSubtarget().getInstrInfo()->get(NVPTX::MOV_DEPOT_ADDR),
               LocalReg).addImm(MF.getFunctionNumber());
     }
   }

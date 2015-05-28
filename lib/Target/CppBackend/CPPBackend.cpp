@@ -15,6 +15,7 @@
 #include "CPPTargetMachine.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Config/config.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
@@ -22,12 +23,12 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Pass.h"
-#include "llvm/PassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
@@ -91,6 +92,7 @@ namespace {
   /// CppWriter - This class is the main chunk of code that converts an LLVM
   /// module to a C++ translation unit.
   class CppWriter : public ModulePass {
+    std::unique_ptr<formatted_raw_ostream> OutOwner;
     formatted_raw_ostream &Out;
     const Module *TheModule;
     uint64_t uniqueNum;
@@ -105,12 +107,13 @@ namespace {
 
   public:
     static char ID;
-    explicit CppWriter(formatted_raw_ostream &o) :
-      ModulePass(ID), Out(o), uniqueNum(0), is_inline(false), indent_level(0){}
+    explicit CppWriter(std::unique_ptr<formatted_raw_ostream> o)
+        : ModulePass(ID), OutOwner(std::move(o)), Out(*OutOwner), uniqueNum(0),
+          is_inline(false), indent_level(0) {}
 
-    virtual const char *getPassName() const { return "C++ backend"; }
+    const char *getPassName() const override { return "C++ backend"; }
 
-    bool runOnModule(Module &M);
+    bool runOnModule(Module &M) override;
 
     void printProgram(const std::string& fname, const std::string& modName );
     void printModule(const std::string& fname, const std::string& modName );
@@ -283,10 +286,6 @@ void CppWriter::printLinkageType(GlobalValue::LinkageTypes LT) {
     Out << "GlobalValue::InternalLinkage"; break;
   case GlobalValue::PrivateLinkage:
     Out << "GlobalValue::PrivateLinkage"; break;
-  case GlobalValue::LinkerPrivateLinkage:
-    Out << "GlobalValue::LinkerPrivateLinkage"; break;
-  case GlobalValue::LinkerPrivateWeakLinkage:
-    Out << "GlobalValue::LinkerPrivateWeakLinkage"; break;
   case GlobalValue::AvailableExternallyLinkage:
     Out << "GlobalValue::AvailableExternallyLinkage "; break;
   case GlobalValue::LinkOnceAnyLinkage:
@@ -400,7 +399,7 @@ std::string CppWriter::getCppName(Type* Ty) {
     return I->second;
 
   // Okay, let's build a new name for this type. Start with a prefix
-  const char* prefix = 0;
+  const char* prefix = nullptr;
   switch (Ty->getTypeID()) {
   case Type::FunctionTyID:    prefix = "FuncTy_"; break;
   case Type::StructTyID:      prefix = "StructTy_"; break;
@@ -1567,16 +1566,24 @@ void CppWriter::printInstruction(const Instruction *I,
   }
   case Instruction::AtomicCmpXchg: {
     const AtomicCmpXchgInst *cxi = cast<AtomicCmpXchgInst>(I);
-    StringRef Ordering = ConvertAtomicOrdering(cxi->getOrdering());
+    StringRef SuccessOrdering =
+        ConvertAtomicOrdering(cxi->getSuccessOrdering());
+    StringRef FailureOrdering =
+        ConvertAtomicOrdering(cxi->getFailureOrdering());
     StringRef CrossThread = ConvertAtomicSynchScope(cxi->getSynchScope());
     Out << "AtomicCmpXchgInst* " << iName
         << " = new AtomicCmpXchgInst("
         << opNames[0] << ", " << opNames[1] << ", " << opNames[2] << ", "
-        << Ordering << ", " << CrossThread << ", " << bbname
+        << SuccessOrdering << ", " << FailureOrdering << ", "
+        << CrossThread << ", " << bbname
         << ");";
     nl(Out) << iName << "->setName(\"";
     printEscapedString(cxi->getName());
     Out << "\");";
+    nl(Out) << iName << "->setVolatile("
+            << (cxi->isVolatile() ? "true" : "false") << ");";
+    nl(Out) << iName << "->setWeak("
+            << (cxi->isWeak() ? "true" : "false") << ");";
     break;
   }
   case Instruction::AtomicRMW: {
@@ -1607,6 +1614,8 @@ void CppWriter::printInstruction(const Instruction *I,
     nl(Out) << iName << "->setName(\"";
     printEscapedString(rmwi->getName());
     Out << "\");";
+    nl(Out) << iName << "->setVolatile("
+            << (rmwi->isVolatile() ? "true" : "false") << ");";
     break;
   }
   case Instruction::LandingPad: {
@@ -1690,9 +1699,8 @@ void CppWriter::printFunctionUses(const Function* F) {
 
   // Print the function declarations for any functions encountered
   nl(Out) << "// Function Declarations"; nl(Out);
-  for (SmallPtrSet<GlobalValue*,64>::iterator I = gvs.begin(), E = gvs.end();
-       I != E; ++I) {
-    if (Function* Fun = dyn_cast<Function>(*I)) {
+  for (auto *GV : gvs) {
+    if (Function *Fun = dyn_cast<Function>(GV)) {
       if (!is_inline || Fun != F)
         printFunctionHead(Fun);
     }
@@ -1700,17 +1708,15 @@ void CppWriter::printFunctionUses(const Function* F) {
 
   // Print the global variable declarations for any variables encountered
   nl(Out) << "// Global Variable Declarations"; nl(Out);
-  for (SmallPtrSet<GlobalValue*,64>::iterator I = gvs.begin(), E = gvs.end();
-       I != E; ++I) {
-    if (GlobalVariable* F = dyn_cast<GlobalVariable>(*I))
+  for (auto *GV : gvs) {
+    if (GlobalVariable *F = dyn_cast<GlobalVariable>(GV))
       printVariableHead(F);
   }
 
   // Print the constants found
   nl(Out) << "// Constant Definitions"; nl(Out);
-  for (SmallPtrSet<Constant*,64>::iterator I = consts.begin(),
-         E = consts.end(); I != E; ++I) {
-    printConstant(*I);
+  for (const auto *C : consts) {
+    printConstant(C);
   }
 
   // Process the global variables definitions now that all the constants have
@@ -1718,10 +1724,9 @@ void CppWriter::printFunctionUses(const Function* F) {
   // initializers.
   if (GenerationType != GenFunction) {
     nl(Out) << "// Global Variable Definitions"; nl(Out);
-    for (SmallPtrSet<GlobalValue*,64>::iterator I = gvs.begin(), E = gvs.end();
-         I != E; ++I) {
-      if (GlobalVariable* GV = dyn_cast<GlobalVariable>(*I))
-        printVariableBody(GV);
+    for (auto *GV : gvs) {
+      if (GlobalVariable *Var = dyn_cast<GlobalVariable>(GV))
+        printVariableBody(Var);
     }
   }
 }
@@ -1940,7 +1945,6 @@ void CppWriter::printModuleBody() {
 void CppWriter::printProgram(const std::string& fname,
                              const std::string& mName) {
   Out << "#include <llvm/Pass.h>\n";
-  Out << "#include <llvm/PassManager.h>\n";
 
   Out << "#include <llvm/ADT/SmallVector.h>\n";
   Out << "#include <llvm/Analysis/Verifier.h>\n";
@@ -1954,6 +1958,7 @@ void CppWriter::printProgram(const std::string& fname,
   Out << "#include <llvm/IR/InlineAsm.h>\n";
   Out << "#include <llvm/IR/Instructions.h>\n";
   Out << "#include <llvm/IR/LLVMContext.h>\n";
+  Out << "#include <llvm/IR/LegacyPassManager.h>\n";
   Out << "#include <llvm/IR/Module.h>\n";
   Out << "#include <llvm/Support/FormattedStream.h>\n";
   Out << "#include <llvm/Support/MathExtras.h>\n";
@@ -1979,7 +1984,8 @@ void CppWriter::printModule(const std::string& fname,
   printEscapedString(mName);
   Out << "\", getGlobalContext());";
   if (!TheModule->getTargetTriple().empty()) {
-    nl(Out) << "mod->setDataLayout(\"" << TheModule->getDataLayout() << "\");";
+    nl(Out) << "mod->setDataLayout(\"" << TheModule->getDataLayoutStr()
+            << "\");";
   }
   if (!TheModule->getTargetTriple().empty()) {
     nl(Out) << "mod->setTargetTriple(\"" << TheModule->getTargetTriple()
@@ -2143,13 +2149,12 @@ char CppWriter::ID = 0;
 //                       External Interface declaration
 //===----------------------------------------------------------------------===//
 
-bool CPPTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
-                                           formatted_raw_ostream &o,
-                                           CodeGenFileType FileType,
-                                           bool DisableVerify,
-                                           AnalysisID StartAfter,
-                                           AnalysisID StopAfter) {
-  if (FileType != TargetMachine::CGFT_AssemblyFile) return true;
-  PM.add(new CppWriter(o));
+bool CPPTargetMachine::addPassesToEmitFile(
+    PassManagerBase &PM, raw_pwrite_stream &o, CodeGenFileType FileType,
+    bool DisableVerify, AnalysisID StartAfter, AnalysisID StopAfter) {
+  if (FileType != TargetMachine::CGFT_AssemblyFile)
+    return true;
+  auto FOut = llvm::make_unique<formatted_raw_ostream>(o);
+  PM.add(new CppWriter(std::move(FOut)));
   return false;
 }

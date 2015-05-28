@@ -32,14 +32,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LTO_CODE_GENERATOR_H
-#define LTO_CODE_GENERATOR_H
+#ifndef LLVM_LTO_LTOCODEGENERATOR_H
+#define LLVM_LTO_LTOCODEGENERATOR_H
 
 #include "llvm-c/lto.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/Linker.h"
+#include "llvm/Linker/Linker.h"
 #include "llvm/Target/TargetOptions.h"
 #include <string>
 #include <vector>
@@ -53,27 +53,34 @@ namespace llvm {
   class TargetLibraryInfo;
   class TargetMachine;
   class raw_ostream;
-}
+  class raw_pwrite_stream;
 
 //===----------------------------------------------------------------------===//
-/// LTOCodeGenerator - C++ class which implements the opaque lto_code_gen_t
-/// type.
+/// C++ class which implements the opaque lto_code_gen_t type.
 ///
 struct LTOCodeGenerator {
   static const char *getVersionString();
 
   LTOCodeGenerator();
+  LTOCodeGenerator(std::unique_ptr<LLVMContext> Context);
   ~LTOCodeGenerator();
 
   // Merge given module, return true on success.
-  bool addModule(struct LTOModule*, std::string &errMsg);
+  bool addModule(struct LTOModule *);
 
-  void setTargetOptions(llvm::TargetOptions options);
+  // Set the destination module.
+  void setModule(struct LTOModule *);
+
+  void setTargetOptions(TargetOptions options);
   void setDebugInfo(lto_debug_model);
   void setCodePICModel(lto_codegen_model);
-  void setInternalizeStrategy(lto_internalize_strategy);
 
   void setCpu(const char *mCpu) { MCpu = mCpu; }
+  void setAttr(const char *mAttr) { MAttr = mAttr; }
+  void setOptLevel(unsigned optLevel) { OptLevel = optLevel; }
+
+  void setShouldInternalize(bool Value) { ShouldInternalize = Value; }
+  void setShouldEmbedUselists(bool Value) { ShouldEmbedUselists = Value; }
 
   void addMustPreserveSymbol(const char *sym) { MustPreserveSymbols[sym] = 1; }
 
@@ -100,9 +107,9 @@ struct LTOCodeGenerator {
   //  Do not try to remove the object file in LTOCodeGenerator's destructor
   //  as we don't who (LTOCodeGenerator or the obj file) will last longer.
   bool compile_to_file(const char **name,
-                       bool disableOpt,
                        bool disableInline,
                        bool disableGVNLoadPRE,
+                       bool disableVectorization,
                        std::string &errMsg);
 
   // As with compile_to_file(), this function compiles the merged module into
@@ -111,59 +118,66 @@ struct LTOCodeGenerator {
   // caller. This function should delete intermediate object file once its content
   // is brought to memory. Return NULL if the compilation was not successful.
   const void *compile(size_t *length,
-                      bool disableOpt,
                       bool disableInline,
                       bool disableGVNLoadPRE,
+                      bool disableVectorization,
                       std::string &errMsg);
+
+  // Optimizes the merged module. Returns true on success.
+  bool optimize(bool disableInline,
+                bool disableGVNLoadPRE,
+                bool disableVectorization,
+                std::string &errMsg);
+
+  // Compiles the merged optimized module into a single object file. It brings
+  // the object to a buffer, and returns the buffer to the caller. Return NULL
+  // if the compilation was not successful.
+  const void *compileOptimized(size_t *length, std::string &errMsg);
 
   void setDiagnosticHandler(lto_diagnostic_handler_t, void *);
 
-  bool shouldInternalize() const {
-    return InternalizeStrategy != LTO_INTERNALIZE_NONE;
-  }
-
-  bool shouldOnlyInternalizeHidden() const {
-    return InternalizeStrategy == LTO_INTERNALIZE_HIDDEN;
-  }
+  LLVMContext &getContext() { return Context; }
 
 private:
   void initializeLTOPasses();
 
-  bool generateObjectFile(llvm::raw_ostream &out,
-                          bool disableOpt,
-                          bool disableInline,
-                          bool disableGVNLoadPRE,
-                          std::string &errMsg);
+  bool compileOptimized(raw_pwrite_stream &out, std::string &errMsg);
+  bool compileOptimizedToFile(const char **name, std::string &errMsg);
   void applyScopeRestrictions();
-  void applyRestriction(llvm::GlobalValue &GV,
-                        const llvm::ArrayRef<llvm::StringRef> &Libcalls,
-                        std::vector<const char*> &MustPreserveList,
-                        llvm::SmallPtrSet<llvm::GlobalValue*, 8> &AsmUsed,
-                        llvm::Mangler &Mangler);
+  void applyRestriction(GlobalValue &GV, ArrayRef<StringRef> Libcalls,
+                        std::vector<const char *> &MustPreserveList,
+                        SmallPtrSetImpl<GlobalValue *> &AsmUsed,
+                        Mangler &Mangler);
   bool determineTarget(std::string &errMsg);
 
-  static void DiagnosticHandler(const llvm::DiagnosticInfo &DI, void *Context);
+  static void DiagnosticHandler(const DiagnosticInfo &DI, void *Context);
 
-  void DiagnosticHandler2(const llvm::DiagnosticInfo &DI);
+  void DiagnosticHandler2(const DiagnosticInfo &DI);
 
-  typedef llvm::StringMap<uint8_t> StringSet;
+  typedef StringMap<uint8_t> StringSet;
 
-  llvm::LLVMContext &Context;
-  llvm::Linker Linker;
-  llvm::TargetMachine *TargetMach;
-  bool EmitDwarfDebugInfo;
-  bool ScopeRestrictionsDone;
-  lto_codegen_model CodeModel;
-  lto_internalize_strategy InternalizeStrategy;
+  void destroyMergedModule();
+  std::unique_ptr<LLVMContext> OwnedContext;
+  LLVMContext &Context;
+  Linker IRLinker;
+  TargetMachine *TargetMach = nullptr;
+  bool EmitDwarfDebugInfo = false;
+  bool ScopeRestrictionsDone = false;
+  lto_codegen_model CodeModel = LTO_CODEGEN_PIC_MODEL_DEFAULT;
   StringSet MustPreserveSymbols;
   StringSet AsmUndefinedRefs;
-  llvm::MemoryBuffer *NativeObjectFile;
+  std::unique_ptr<MemoryBuffer> NativeObjectFile;
   std::vector<char *> CodegenOptions;
   std::string MCpu;
+  std::string MAttr;
   std::string NativeObjectPath;
-  llvm::TargetOptions Options;
-  lto_diagnostic_handler_t DiagHandler;
-  void *DiagContext;
+  TargetOptions Options;
+  unsigned OptLevel = 2;
+  lto_diagnostic_handler_t DiagHandler = nullptr;
+  void *DiagContext = nullptr;
+  LTOModule *OwnedModule = nullptr;
+  bool ShouldInternalize = true;
+  bool ShouldEmbedUselists = false;
 };
-
-#endif // LTO_CODE_GENERATOR_H
+}
+#endif

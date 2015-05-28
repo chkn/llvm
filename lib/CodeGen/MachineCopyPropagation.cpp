@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "codegen-cp"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
@@ -26,7 +25,10 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
+
+#define DEBUG_TYPE "codegen-cp"
 
 STATISTIC(NumDeletes, "Number of dead copies deleted");
 
@@ -42,7 +44,7 @@ namespace {
      initializeMachineCopyPropagationPass(*PassRegistry::getPassRegistry());
     }
 
-    virtual bool runOnMachineFunction(MachineFunction &MF);
+    bool runOnMachineFunction(MachineFunction &MF) override;
 
   private:
     typedef SmallVector<unsigned, 4> DestList;
@@ -73,10 +75,9 @@ MachineCopyPropagation::SourceNoLongerAvailable(unsigned Reg,
            I != E; ++I) {
         unsigned MappedDef = *I;
         // Source of copy is no longer available for propagation.
-        if (AvailCopyMap.erase(MappedDef)) {
-          for (MCSubRegIterator SR(MappedDef, TRI); SR.isValid(); ++SR)
-            AvailCopyMap.erase(*SR);
-        }
+        AvailCopyMap.erase(MappedDef);
+        for (MCSubRegIterator SR(MappedDef, TRI); SR.isValid(); ++SR)
+          AvailCopyMap.erase(*SR);
       }
     }
   }
@@ -251,7 +252,11 @@ bool MachineCopyPropagation::CopyPropagateBlock(MachineBasicBlock &MBB) {
         report_fatal_error("MachineCopyPropagation should be run after"
                            " register allocation!");
 
-      if (MO.isDef()) {
+      // Treat undef use like defs.
+      // The backends are allowed to do whatever they want with undef value
+      // and we cannot be sure this register will not be rewritten to break
+      // some false dependencies for the hardware for instance.
+      if (MO.isDef() || MO.isUndef()) {
         Defs.push_back(Reg);
         continue;
       }
@@ -329,10 +334,13 @@ bool MachineCopyPropagation::CopyPropagateBlock(MachineBasicBlock &MBB) {
 }
 
 bool MachineCopyPropagation::runOnMachineFunction(MachineFunction &MF) {
+  if (skipOptnoneFunction(*MF.getFunction()))
+    return false;
+
   bool Changed = false;
 
-  TRI = MF.getTarget().getRegisterInfo();
-  TII = MF.getTarget().getInstrInfo();
+  TRI = MF.getSubtarget().getRegisterInfo();
+  TII = MF.getSubtarget().getInstrInfo();
   MRI = &MF.getRegInfo();
 
   for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I)

@@ -2,6 +2,14 @@
 
 // Test that we produce the correct relocation.
 
+
+        .section	.pr23272,"aGw",@progbits,pr23272,comdat
+	.globl pr23272
+pr23272:
+pr23272_2:
+pr23272_3 = pr23272_2
+
+        .text
 bar:
         movl	$bar, %edx        # R_X86_64_32
         movq	$bar, %rdx        # R_X86_64_32S
@@ -25,6 +33,27 @@ bar:
 	.word   foo-bar
 	.byte   foo-bar
 
+        # this should probably be an error...
+	zed = foo +2
+	call zed@PLT
+
+        leaq    -1+foo(%rip), %r11
+
+        movl  $_GLOBAL_OFFSET_TABLE_, %eax
+        movabs  $_GLOBAL_OFFSET_TABLE_, %rax
+
+        .quad    blah@SIZE                        # R_X86_64_SIZE64
+        .quad    blah@SIZE + 32                   # R_X86_64_SIZE64
+        .quad    blah@SIZE - 32                   # R_X86_64_SIZE64
+         movl    blah@SIZE, %eax                  # R_X86_64_SIZE32
+         movl    blah@SIZE + 32, %eax             # R_X86_64_SIZE32
+         movl    blah@SIZE - 32, %eax             # R_X86_64_SIZE32
+
+        .long   foo@gotpcrel
+        .long foo@plt
+
+        .quad	pr23272_2 - pr23272
+        .quad	pr23272_3 - pr23272
 // CHECK:        Section {
 // CHECK:          Name: .rela.text
 // CHECK:          Relocations [
@@ -49,6 +78,18 @@ bar:
 // CHECK-NEXT:       0x85 R_X86_64_TPOFF64 baz 0x0
 // CHECK-NEXT:       0x8D R_X86_64_PC16 foo 0x8D
 // CHECK-NEXT:       0x8F R_X86_64_PC8 foo 0x8F
+// CHECK-NEXT:       0x91 R_X86_64_PLT32 zed 0xFFFFFFFFFFFFFFFC
+// CHECK-NEXT:       0x98 R_X86_64_PC32 foo 0xFFFFFFFFFFFFFFFB
+// CHECK-NEXT:       0x9D R_X86_64_GOTPC32 _GLOBAL_OFFSET_TABLE_ 0x1
+// CHECK-NEXT:       0xA3 R_X86_64_GOTPC64 _GLOBAL_OFFSET_TABLE_ 0x2
+// CHECK-NEXT:       0xAB R_X86_64_SIZE64 blah 0x0
+// CHECK-NEXT:       0xB3 R_X86_64_SIZE64 blah 0x20
+// CHECK-NEXT:       0xBB R_X86_64_SIZE64 blah 0xFFFFFFFFFFFFFFE0
+// CHECK-NEXT:       0xC6 R_X86_64_SIZE32 blah 0x0
+// CHECK-NEXT:       0xCD R_X86_64_SIZE32 blah 0x20
+// CHECK-NEXT:       0xD4 R_X86_64_SIZE32 blah 0xFFFFFFFFFFFFFFE0
+// CHECK-NEXT:       0xD8 R_X86_64_GOTPCREL foo 0x0
+// CHECK-NEXT:       0xDC R_X86_64_PLT32 foo 0x0
 // CHECK-NEXT:     ]
 // CHECK-NEXT:   }
 
@@ -59,5 +100,5 @@ bar:
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: Section
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }

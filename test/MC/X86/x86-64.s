@@ -203,7 +203,7 @@ int	$3
 // CHECK-STDERR: warning: scale factor without index register is ignored
 movaps %xmm3, (%esi, 2)
 
-// CHECK: imull $12, %eax, %eax
+// CHECK: imull $12, %eax
 imul $12, %eax
 
 // CHECK: imull %ecx, %eax
@@ -613,7 +613,7 @@ movq _foo@GOTPCREL(%rip), %r14
 movq 0x00(%r13,%rax,8),%r13
 
 // CHECK: testq	%rax, %rbx
-// CHECK:  encoding: [0x48,0x85,0xd8]
+// CHECK:  encoding: [0x48,0x85,0xc3]
 testq %rax, %rbx
 
 // CHECK: cmpq	%rbx, %r14

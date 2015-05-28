@@ -17,9 +17,7 @@
 #include "llvm/Support/DataTypes.h"
 
 namespace llvm {
-
-class MemoryBuffer;
-template<typename T> class OwningPtr;
+template <typename T> class SmallVectorImpl;
 class StringRef;
 
 namespace zlib {
@@ -42,12 +40,11 @@ enum Status {
 
 bool isAvailable();
 
-Status compress(StringRef InputBuffer,
-                OwningPtr<MemoryBuffer> &CompressedBuffer,
+Status compress(StringRef InputBuffer, SmallVectorImpl<char> &CompressedBuffer,
                 CompressionLevel Level = DefaultCompression);
 
 Status uncompress(StringRef InputBuffer,
-                  OwningPtr<MemoryBuffer> &UncompressedBuffer,
+                  SmallVectorImpl<char> &UncompressedBuffer,
                   size_t UncompressedSize);
 
 uint32_t crc32(StringRef Buffer);

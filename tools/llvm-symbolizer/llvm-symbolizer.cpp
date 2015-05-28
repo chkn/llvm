@@ -17,9 +17,12 @@
 
 #include "LLVMSymbolize.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/COM.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
@@ -35,14 +38,24 @@ ClUseSymbolTable("use-symbol-table", cl::init(true),
                  cl::desc("Prefer names in symbol table to names "
                           "in debug info"));
 
-static cl::opt<bool>
-ClPrintFunctions("functions", cl::init(true),
-                 cl::desc("Print function names as well as line "
-                          "information for a given address"));
+static cl::opt<FunctionNameKind> ClPrintFunctions(
+    "functions", cl::init(FunctionNameKind::LinkageName),
+    cl::desc("Print function name for a given address:"),
+    cl::values(clEnumValN(FunctionNameKind::None, "none", "omit function name"),
+               clEnumValN(FunctionNameKind::ShortName, "short",
+                          "print short function name"),
+               clEnumValN(FunctionNameKind::LinkageName, "linkage",
+                          "print function linkage name"),
+               clEnumValEnd));
 
 static cl::opt<bool>
-ClPrintInlining("inlining", cl::init(true),
-                cl::desc("Print all inlined frames for a given address"));
+    ClUseRelativeAddress("relative-address", cl::init(false),
+                         cl::desc("Interpret addresses as relative addresses"),
+                         cl::ReallyHidden);
+
+static cl::opt<bool>
+    ClPrintInlining("inlining", cl::init(true),
+                    cl::desc("Print all inlined frames for a given address"));
 
 static cl::opt<bool>
 ClDemangle("demangle", cl::init(true), cl::desc("Demangle function names"));
@@ -55,6 +68,11 @@ static cl::opt<std::string>
 ClBinaryName("obj", cl::init(""),
              cl::desc("Path to object file to be symbolized (if not provided, "
                       "object file should be specified for each input line)"));
+
+static cl::list<std::string>
+ClDsymHint("dsym-hint", cl::ZeroOrMore,
+           cl::desc("Path to .dSYM bundles to search for debug info for the "
+                    "object files"));
 
 static bool parseCommand(bool &IsData, std::string &ModuleName,
                          uint64_t &ModuleOffset) {
@@ -85,7 +103,7 @@ static bool parseCommand(bool &IsData, std::string &ModuleName,
       char quote = *pos;
       pos++;
       char *end = strchr(pos, quote);
-      if (end == 0)
+      if (!end)
         return false;
       ModuleName = std::string(pos, end - pos);
       pos = end + 1;
@@ -111,9 +129,20 @@ int main(int argc, char **argv) {
   PrettyStackTraceProgram X(argc, argv);
   llvm_shutdown_obj Y; // Call llvm_shutdown() on exit.
 
+  llvm::sys::InitializeCOMRAII COM(llvm::sys::COMThreadingMode::MultiThreaded);
+
   cl::ParseCommandLineOptions(argc, argv, "llvm-symbolizer\n");
-  LLVMSymbolizer::Options Opts(ClUseSymbolTable, ClPrintFunctions,
-                               ClPrintInlining, ClDemangle, ClDefaultArch);
+  LLVMSymbolizer::Options Opts(ClPrintFunctions, ClUseSymbolTable,
+                               ClPrintInlining, ClDemangle,
+                               ClUseRelativeAddress, ClDefaultArch);
+  for (const auto &hint : ClDsymHint) {
+    if (sys::path::extension(hint) == ".dSYM") {
+      Opts.DsymHints.push_back(hint);
+    } else {
+      errs() << "Warning: invalid dSYM hint: \"" << hint <<
+                "\" (must have the '.dSYM' extension).\n";
+    }
+  }
   LLVMSymbolizer Symbolizer(Opts);
 
   bool IsData = false;
@@ -126,5 +155,6 @@ int main(int argc, char **argv) {
     outs() << Result << "\n";
     outs().flush();
   }
+
   return 0;
 }

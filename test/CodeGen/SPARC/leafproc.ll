@@ -11,7 +11,7 @@ entry:
 
 ; CHECK-LABEL:      return_int_const:
 ; CHECK:      retl
-; CHECK-NEXT: or %g0, 1729, %o0
+; CHECK-NEXT: mov 1729, %o0
 define i32 @return_int_const() {
 entry:
   ret i32 1729
@@ -58,9 +58,9 @@ entry:
 
 ; CHECK-LABEL:      leaf_proc_with_local_array:
 ; CHECK:      add %sp, -104, %sp
-; CHECK:      or %g0, 1, [[R1:%[go][0-7]]]
+; CHECK:      mov 1, [[R1:%[go][0-7]]]
 ; CHECK:      st [[R1]], [%sp+96]
-; CHECK:      or %g0, 2, [[R2:%[go][0-7]]]
+; CHECK:      mov 2, [[R2:%[go][0-7]]]
 ; CHECK:      st [[R2]], [%sp+100]
 ; CHECK:      ld {{.+}}, %o0
 ; CHECK:      retl
@@ -70,11 +70,11 @@ define i32 @leaf_proc_with_local_array(i32 %a, i32 %b, i32 %c) {
 entry:
   %array = alloca [2 x i32], align 4
   %0 = sub nsw i32 %b, %c
-  %1 = getelementptr inbounds [2 x i32]* %array, i32 0, i32 0
+  %1 = getelementptr inbounds [2 x i32], [2 x i32]* %array, i32 0, i32 0
   store i32 1, i32* %1, align 4
-  %2 = getelementptr inbounds [2 x i32]* %array, i32 0, i32 1
+  %2 = getelementptr inbounds [2 x i32], [2 x i32]* %array, i32 0, i32 1
   store i32 2, i32* %2, align 4
-  %3 = getelementptr inbounds [2 x i32]* %array, i32 0, i32 %a
-  %4 = load i32* %3, align 4
+  %3 = getelementptr inbounds [2 x i32], [2 x i32]* %array, i32 0, i32 %a
+  %4 = load i32, i32* %3, align 4
   ret i32 %4
 }

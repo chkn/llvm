@@ -1,6 +1,7 @@
 ; RUN: llc -mtriple=thumbv7-apple-none-macho < %s | FileCheck %s
 ; RUN: llc -mtriple=thumbv6m-apple-none-macho -disable-fp-elim < %s | FileCheck %s --check-prefix=CHECK-T1
 ; RUN: llc -mtriple=thumbv7-apple-darwin-ios -disable-fp-elim < %s | FileCheck %s --check-prefix=CHECK-IOS
+; RUN: llc -mtriple=thumbv7--linux-gnueabi -disable-fp-elim < %s | FileCheck %s --check-prefix=CHECK-LINUX
 
 
 declare void @bar(i8*)
@@ -70,7 +71,7 @@ define void @check_vfp_fold() minsize {
 ; CHECK-IOS-LABEL: check_vfp_fold:
 ; CHECK-IOS: push {r0, r1, r2, r3, r4, r7, lr}
 ; CHECK-IOS: sub.w r4, sp, #16
-; CHECK-IOS: bic r4, r4, #15
+; CHECK-IOS: bfc r4, #0, #4
 ; CHECK-IOS: mov sp, r4
 ; CHECK-IOS: vst1.64 {d8, d9}, [r4:128]
 ; ...
@@ -81,7 +82,7 @@ define void @check_vfp_fold() minsize {
 
   %var = alloca i8, i32 16
 
-  %tmp = load %bigVec* @var
+  %tmp = load %bigVec, %bigVec* @var
   call void @bar(i8* %var)
   store %bigVec %tmp, %bigVec* @var
 
@@ -118,7 +119,7 @@ define arm_aapcs_vfpcc double @check_vfp_no_return_clobber() minsize {
 
   %var = alloca i8, i32 64
 
-  %tmp = load %bigVec* @var
+  %tmp = load %bigVec, %bigVec* @var
   call void @bar(i8* %var)
   store %bigVec %tmp, %bigVec* @var
 
@@ -151,7 +152,7 @@ define void @test_fold_point(i1 %tst) minsize {
 
   ; We want a long-lived floating register so that a callee-saved dN is used and
   ; there's both a vpop and a pop.
-  %live_val = load double* @dbl
+  %live_val = load double, double* @dbl
   br i1 %tst, label %true, label %end
 true:
   call void @bar(i8* %var)
@@ -166,9 +167,9 @@ end:
 define void @test_varsize(...) minsize {
 ; CHECK-T1-LABEL: test_varsize:
 ; CHECK-T1: sub	sp, #16
-; CHECK-T1: push	{r2, r3, r4, r5, r7, lr}
+; CHECK-T1: push	{r5, r6, r7, lr}
 ; ...
-; CHECK-T1: pop	{r2, r3, r4, r5, r7}
+; CHECK-T1: pop	{r2, r3, r7}
 ; CHECK-T1: pop	{r3}
 ; CHECK-T1: add	sp, #16
 ; CHECK-T1: bx	r3
@@ -182,6 +183,39 @@ define void @test_varsize(...) minsize {
 ; CHECK: bx	lr
 
   %var = alloca i8, i32 8
+  call void @llvm.va_start(i8* %var)
   call void @bar(i8* %var)
   ret void
 }
+
+%"MyClass" = type { i8*, i32, i32, float, float, float, [2 x i8], i32, i32* }
+
+declare float @foo()
+
+declare void @bar3()
+
+declare %"MyClass"* @bar2(%"MyClass"* returned, i16*, i32, float, float, i32, i32, i1 zeroext, i1 zeroext, i32)
+
+define fastcc float @check_vfp_no_return_clobber2(i16* %r, i16* %chars, i32 %length, i1 zeroext %flag) minsize {
+entry:
+; CHECK-LINUX-LABEL: check_vfp_no_return_clobber2
+; CHECK-LINUX: vpush	{d0, d1, d2, d3, d4, d5, d6, d7, d8}
+; CHECK-NOT: sub sp,
+; ...
+; CHECK-LINUX: add sp
+; CHECK-LINUX: vpop {d8}
+  %run = alloca %"MyClass", align 4
+  %call = call %"MyClass"* @bar2(%"MyClass"* %run, i16* %chars, i32 %length, float 0.000000e+00, float 0.000000e+00, i32 1, i32 1, i1 zeroext false, i1 zeroext true, i32 3)
+  %call1 = call float @foo()
+  %cmp = icmp eq %"MyClass"* %run, null
+  br i1 %cmp, label %exit, label %if.then
+
+if.then:                                          ; preds = %entry
+  call void @bar3()
+  br label %exit
+
+exit:                                             ; preds = %if.then, %entry
+  ret float %call1
+}
+
+declare void @llvm.va_start(i8*) nounwind

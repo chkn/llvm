@@ -8,8 +8,8 @@
 //===----------------------------------------------------------------------===//
 /// \file
 ///
-/// Generic dominator tree construction - This file provides rouitens to
-/// constructs immediate dominator information for a flow-graph based on the
+/// Generic dominator tree construction - This file provides routines to
+/// construct immediate dominator information for a flow-graph based on the
 /// algorithm described in this document:
 ///
 ///   A Fast Algorithm for Finding Dominators in a Flowgraph
@@ -22,8 +22,8 @@
 //===----------------------------------------------------------------------===//
 
 
-#ifndef LLVM_SUPPORT_GENERIC_DOM_TREE_CONSTRUCTION_H
-#define LLVM_SUPPORT_GENERIC_DOM_TREE_CONSTRUCTION_H
+#ifndef LLVM_SUPPORT_GENERICDOMTREECONSTRUCTION_H
+#define LLVM_SUPPORT_GENERICDOMTREECONSTRUCTION_H
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/GenericDomTree.h"
@@ -125,7 +125,7 @@ Eval(DominatorTreeBase<typename GraphT::NodeType>& DT,
     typename GraphT::NodeType* VAncestor = DT.Vertex[VInfo.Parent];
 
     // Process Ancestor first
-    if (Visited.insert(VAncestor) && VInfo.Parent >= LastLinked) {
+    if (Visited.insert(VAncestor).second && VInfo.Parent >= LastLinked) {
       Work.push_back(VAncestor);
       continue;
     } 
@@ -156,11 +156,11 @@ void Calculate(DominatorTreeBase<typename GraphTraits<NodeT>::NodeType>& DT,
   bool MultipleRoots = (DT.Roots.size() > 1);
   if (MultipleRoots) {
     typename DominatorTreeBase<typename GraphT::NodeType>::InfoRec &BBInfo =
-        DT.Info[NULL];
+        DT.Info[nullptr];
     BBInfo.DFSNum = BBInfo.Semi = ++N;
-    BBInfo.Label = NULL;
+    BBInfo.Label = nullptr;
 
-    DT.Vertex.push_back(NULL);       // Vertex[n] = V;
+    DT.Vertex.push_back(nullptr);       // Vertex[n] = V;
   }
 
   // Step #1: Number blocks in depth-first order and initialize variables used
@@ -249,21 +249,24 @@ void Calculate(DominatorTreeBase<typename GraphTraits<NodeT>::NodeType>& DT,
   // one exit block, or it may be the virtual exit (denoted by (BasicBlock *)0)
   // which postdominates all real exits if there are multiple exit blocks, or
   // an infinite loop.
-  typename GraphT::NodeType* Root = !MultipleRoots ? DT.Roots[0] : 0;
+  typename GraphT::NodeType* Root = !MultipleRoots ? DT.Roots[0] : nullptr;
 
-  DT.DomTreeNodes[Root] = DT.RootNode =
-                        new DomTreeNodeBase<typename GraphT::NodeType>(Root, 0);
+  DT.RootNode =
+      (DT.DomTreeNodes[Root] =
+           llvm::make_unique<DomTreeNodeBase<typename GraphT::NodeType>>(
+               Root, nullptr)).get();
 
   // Loop over all of the reachable blocks in the function...
   for (unsigned i = 2; i <= N; ++i) {
     typename GraphT::NodeType* W = DT.Vertex[i];
 
-    DomTreeNodeBase<typename GraphT::NodeType> *BBNode = DT.DomTreeNodes[W];
-    if (BBNode) continue;  // Haven't calculated this node yet?
+    // Don't replace this with 'count', the insertion side effect is important
+    if (DT.DomTreeNodes[W])
+      continue; // Haven't calculated this node yet?
 
     typename GraphT::NodeType* ImmDom = DT.getIDom(W);
 
-    assert(ImmDom || DT.DomTreeNodes[NULL]);
+    assert(ImmDom || DT.DomTreeNodes[nullptr]);
 
     // Get or calculate the node for the immediate dominator
     DomTreeNodeBase<typename GraphT::NodeType> *IDomNode =
@@ -271,15 +274,16 @@ void Calculate(DominatorTreeBase<typename GraphTraits<NodeT>::NodeType>& DT,
 
     // Add a new tree node for this BasicBlock, and link it as a child of
     // IDomNode
-    DomTreeNodeBase<typename GraphT::NodeType> *C =
-                    new DomTreeNodeBase<typename GraphT::NodeType>(W, IDomNode);
-    DT.DomTreeNodes[W] = IDomNode->addChild(C);
+    DT.DomTreeNodes[W] = IDomNode->addChild(
+        llvm::make_unique<DomTreeNodeBase<typename GraphT::NodeType>>(
+            W, IDomNode));
   }
 
   // Free temporary memory used to construct idom's
   DT.IDoms.clear();
   DT.Info.clear();
-  std::vector<typename GraphT::NodeType*>().swap(DT.Vertex);
+  DT.Vertex.clear();
+  DT.Vertex.shrink_to_fit();
 
   DT.updateDFSNumbers();
 }

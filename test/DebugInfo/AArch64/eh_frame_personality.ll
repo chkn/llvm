@@ -33,7 +33,7 @@ clean:
 ; ----------
 ; 1c000000: Length = 0x1c
 ; 00000000: This is a CIE
-; 01: Version 1
+; 03: Version 3
 ; 7a 50 4c 52 00: Augmentation string "zPLR" (personality routine, language-specific data, pointer format)
 ; 01: Code alignment factor 1
 ; 78: Data alignment factor: -8

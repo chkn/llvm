@@ -28,6 +28,7 @@ namespace llvm {
 
 class Function;
 class FunctionPass;
+class ModulePass;
 class Module;
 class PreservedAnalyses;
 class raw_ostream;
@@ -38,14 +39,14 @@ class raw_ostream;
 /// If there are no errors, the function returns false. If an error is found,
 /// a message describing the error is written to OS (if non-null) and true is
 /// returned.
-bool verifyFunction(const Function &F, raw_ostream *OS = 0);
+bool verifyFunction(const Function &F, raw_ostream *OS = nullptr);
 
 /// \brief Check a module for errors.
 ///
 /// If there are no errors, the function returns false. If an error is found,
 /// a message describing the error is written to OS (if non-null) and true is
 /// returned.
-bool verifyModule(const Module &M, raw_ostream *OS = 0);
+bool verifyModule(const Module &M, raw_ostream *OS = nullptr);
 
 /// \brief Create a verifier pass.
 ///
@@ -55,7 +56,8 @@ bool verifyModule(const Module &M, raw_ostream *OS = 0);
 /// printed to stderr, and by default they are fatal. You can override that by
 /// passing \c false to \p FatalErrors.
 ///
-/// Note that this creates a pass suitable for the legacy pass manager. It has nothing to do with \c VerifierPass.
+/// Note that this creates a pass suitable for the legacy pass manager. It has
+/// nothing to do with \c VerifierPass.
 FunctionPass *createVerifierPass(bool FatalErrors = true);
 
 class VerifierPass {
@@ -64,8 +66,8 @@ class VerifierPass {
 public:
   explicit VerifierPass(bool FatalErrors = true) : FatalErrors(FatalErrors) {}
 
-  PreservedAnalyses run(Module *M);
-  PreservedAnalyses run(Function *F);
+  PreservedAnalyses run(Module &M);
+  PreservedAnalyses run(Function &F);
 
   static StringRef name() { return "VerifierPass"; }
 };

@@ -1,13 +1,13 @@
 ======================
-LLVM 3.5 Release Notes
+LLVM 3.7 Release Notes
 ======================
 
 .. contents::
     :local:
 
 .. warning::
-   These are in-progress notes for the upcoming LLVM 3.5 release.  You may
-   prefer the `LLVM 3.4 Release Notes <http://llvm.org/releases/3.4/docs
+   These are in-progress notes for the upcoming LLVM 3.7 release.  You may
+   prefer the `LLVM 3.6 Release Notes <http://llvm.org/releases/3.6.0/docs
    /ReleaseNotes.html>`_.
 
 
@@ -15,7 +15,7 @@ Introduction
 ============
 
 This document contains the release notes for the LLVM Compiler Infrastructure,
-release 3.5.  Here we describe the status of LLVM, including major improvements
+release 3.7.  Here we describe the status of LLVM, including major improvements
 from the previous release, improvements in various subprojects of LLVM, and
 some of the current users of the code.  All LLVM releases may be downloaded
 from the `LLVM releases web site <http://llvm.org/releases/>`_.
@@ -34,33 +34,24 @@ page <http://llvm.org/releases/>`_.
 Non-comprehensive list of changes in this release
 =================================================
 
-* All backends have been changed to use the MC asm printer and support for the
-  non MC one has been removed.
-
-* The ARM back-end now has the EHABI exception handling enabled by default. Use
-  `-arm-disable-ehabi` to turn it off (both landing pads and unwind tables).
-
-* Clang can now successfully self-host itself on Linux/Sparc64 and on
-  FreeBSD/Sparc64.
-
-* LLVM now assumes the assembler supports ``.loc`` for generating debug line
-  numbers. The old support for printing the debug line info directly was only
-  used by ``llc`` and has been removed.
-
-* All inline assembly is parsed by the integrated assembler when it is enabled.
-  Previously this was only the case for object-file output. It is now the case
-  for assembly output as well. The integrated assembler can be disabled with
-  the ``-no-integrated-as`` option,
-
-* llvm-ar now handles IR files like regular object files. In particular, a
-  regular symbol table is created for symbols defined in IR files.
-
 .. NOTE
    For small 1-3 sentence descriptions, just add an entry at the end of
    this list. If your description won't fit comfortably in one bullet
    point (e.g. maybe you would like to give an example of the
    functionality, or simply have a lot to talk about), see the `NOTE` below
    for adding a new subsection.
+
+* The minimum required Visual Studio version for building LLVM is now 2013
+  Update 4.
+
+* A new documentation page, :doc:`Frontend/PerformanceTips`, contains a
+  collection of tips for frontend authors on how to generate IR which LLVM is
+  able to effectively optimize.
+
+* The DataLayout is no longer optional. All the IR level optimizations expects
+  it to be present and the API has been changed to use a reference instead of
+  a pointer to make it explicit. The Module owns the datalayout and it has to
+  match the one attached to the TargetMachine for generating code.
 
 * ... next change ...
 
@@ -74,12 +65,38 @@ Non-comprehensive list of changes in this release
 
    Makes programs 10x faster by doing Special New Thing.
 
-External Open Source Projects Using LLVM 3.5
+Changes to the ARM Backend
+--------------------------
+
+ During this release ...
+
+
+Changes to the MIPS Target
+--------------------------
+
+ During this release ...
+
+
+Changes to the PowerPC Target
+-----------------------------
+
+ During this release ...
+
+
+Changes to the OCaml bindings
+-----------------------------
+
+ During this release ...
+
+
+External Open Source Projects Using LLVM 3.7
 ============================================
 
 An exciting aspect of LLVM is that it is used as an enabling technology for
 a lot of other language and tools projects. This section lists some of the
-projects that have already been updated to work with LLVM 3.5.
+projects that have already been updated to work with LLVM 3.7.
+
+* A project
 
 
 Additional Information

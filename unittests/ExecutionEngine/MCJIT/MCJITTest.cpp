@@ -22,7 +22,7 @@ namespace {
 
 class MCJITTest : public testing::Test, public MCJITTestBase {
 protected:
-  virtual void SetUp() { M.reset(createEmptyModule("<main>")); }
+  void SetUp() override { M.reset(createEmptyModule("<main>")); }
 };
 
 // FIXME: Ensure creating an execution engine does not crash when constructed
@@ -49,9 +49,9 @@ TEST_F(MCJITTest, global_variable) {
 
   int initialValue = 5;
   GlobalValue *Global = insertGlobalInt32(M.get(), "test_global", initialValue);
-  createJIT(M.take());
+  createJIT(std::move(M));
   void *globalPtr =  TheJIT->getPointerToGlobal(Global);
-  EXPECT_TRUE(0 != globalPtr)
+  EXPECT_TRUE(nullptr != globalPtr)
     << "Unable to get pointer to global value from JIT";
 
   EXPECT_EQ(initialValue, *(int32_t*)globalPtr)
@@ -62,7 +62,7 @@ TEST_F(MCJITTest, add_function) {
   SKIP_UNSUPPORTED_PLATFORM;
 
   Function *F = insertAddFunction(M.get());
-  createJIT(M.take());
+  createJIT(std::move(M));
   uint64_t addPtr = TheJIT->getFunctionAddress(F->getName().str());
   EXPECT_TRUE(0 != addPtr)
     << "Unable to get pointer to function from JIT";
@@ -83,7 +83,7 @@ TEST_F(MCJITTest, run_main) {
 
   int rc = 6;
   Function *Main = insertMainFunction(M.get(), 6);
-  createJIT(M.take());
+  createJIT(std::move(M));
   uint64_t ptr = TheJIT->getFunctionAddress(Main->getName().str());
   EXPECT_TRUE(0 != ptr)
     << "Unable to get pointer to main() from JIT";
@@ -104,7 +104,7 @@ TEST_F(MCJITTest, return_global) {
   Value *ReadGlobal = Builder.CreateLoad(GV);
   endFunctionWithRet(ReturnGlobal, ReadGlobal);
 
-  createJIT(M.take());
+  createJIT(std::move(M));
   uint64_t rgvPtr = TheJIT->getFunctionAddress(ReturnGlobal->getName().str());
   EXPECT_TRUE(0 != rgvPtr);
 
@@ -169,13 +169,13 @@ TEST_F(MCJITTest, multiple_functions) {
     std::stringstream funcName;
     funcName << "level_" << i;
     Outer = startFunction<int32_t(void)>(M.get(), funcName.str());
-    Value *innerResult = Builder.CreateCall(Inner);
+    Value *innerResult = Builder.CreateCall(Inner, {});
     endFunctionWithRet(Outer, innerResult);
 
     Inner = Outer;
   }
 
-  createJIT(M.take());
+  createJIT(std::move(M));
   uint64_t ptr = TheJIT->getFunctionAddress(Outer->getName().str());
   EXPECT_TRUE(0 != ptr)
     << "Unable to get pointer to outer function from JIT";
@@ -186,5 +186,17 @@ TEST_F(MCJITTest, multiple_functions) {
 }
 
 #endif /*!defined(__arm__)*/
+
+TEST_F(MCJITTest, multiple_decl_lookups) {
+  SKIP_UNSUPPORTED_PLATFORM;
+
+  Function *Foo = insertExternalReferenceToFunction<void(void)>(M.get(), "_exit");
+  createJIT(std::move(M));
+  void *A = TheJIT->getPointerToFunction(Foo);
+  void *B = TheJIT->getPointerToFunction(Foo);
+
+  EXPECT_TRUE(A != 0) << "Failed lookup - test not correctly configured.";
+  EXPECT_EQ(A, B) << "Repeat calls to getPointerToFunction fail.";
+}
 
 }

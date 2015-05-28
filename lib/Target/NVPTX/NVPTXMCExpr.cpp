@@ -7,12 +7,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "nvptx-mcexpr"
 #include "NVPTXMCExpr.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 using namespace llvm;
+
+#define DEBUG_TYPE "nvptx-mcexpr"
 
 const NVPTXFloatMCExpr*
 NVPTXFloatMCExpr::Create(VariantKind Kind, APFloat Flt, MCContext &Ctx) {
@@ -43,4 +44,14 @@ void NVPTXFloatMCExpr::PrintImpl(raw_ostream &OS) const {
   if (HexStr.length() < NumHex)
     OS << std::string(NumHex - HexStr.length(), '0');
   OS << utohexstr(API.getZExtValue());
+}
+
+const NVPTXGenericMCSymbolRefExpr*
+NVPTXGenericMCSymbolRefExpr::Create(const MCSymbolRefExpr *SymExpr,
+                                    MCContext &Ctx) {
+  return new (Ctx) NVPTXGenericMCSymbolRefExpr(SymExpr);
+}
+
+void NVPTXGenericMCSymbolRefExpr::PrintImpl(raw_ostream &OS) const {
+  OS << "generic(" << *SymExpr << ")";
 }

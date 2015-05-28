@@ -332,7 +332,7 @@ as a field type:
       }
     };
 
-When reading YAML, if the string found does not match any of the the strings
+When reading YAML, if the string found does not match any of the strings
 specified by enumCase() methods, an error is automatically generated.
 When writing YAML, if the value being written does not match any of the values
 specified by the enumCase() methods, a runtime assertion is triggered.
@@ -399,6 +399,42 @@ the above schema, a same valid YAML document is:
     name:    Tom
     flags:   [ pointy, flat ]
 
+Sometimes a "flags" field might contains an enumeration part
+defined by a bit-mask.
+
+.. code-block:: c++
+
+    enum {
+      flagsFeatureA = 1,
+      flagsFeatureB = 2,
+      flagsFeatureC = 4,
+
+      flagsCPUMask = 24,
+
+      flagsCPU1 = 8,
+      flagsCPU2 = 16
+    };
+
+To support reading and writing such fields, you need to use the maskedBitSet()
+method and provide the bit values, their names and the enumeration mask.
+
+.. code-block:: c++
+
+    template <>
+    struct ScalarBitSetTraits<MyFlags> {
+      static void bitset(IO &io, MyFlags &value) {
+        io.bitSetCase(value, "featureA",  flagsFeatureA);
+        io.bitSetCase(value, "featureB",  flagsFeatureB);
+        io.bitSetCase(value, "featureC",  flagsFeatureC);
+        io.maskedBitSetCase(value, "CPU1",  flagsCPU1, flagsCPUMask);
+        io.maskedBitSetCase(value, "CPU2",  flagsCPU2, flagsCPUMask);
+      }
+    };
+
+YAML I/O (when writing) will apply the enumeration mask to the flags field,
+and compare the result and values from the bitset. As in case of a regular
+bitset, each that matches will cause the corresponding string to be added
+to the flow sequence.
 
 Custom Scalar
 -------------
@@ -420,15 +456,67 @@ looks like:
 
     template <>
     struct ScalarTraits<MyCustomType> {
-      static void output(const T &value, llvm::raw_ostream &out) {
+      static void output(const T &value, void*, llvm::raw_ostream &out) {
         out << value;  // do custom formatting here
       }
-      static StringRef input(StringRef scalar, T &value) {
+      static StringRef input(StringRef scalar, void*, T &value) {
         // do custom parsing here.  Return the empty string on success,
         // or an error message on failure.
-        return StringRef(); 
+        return StringRef();
+      }
+      // Determine if this scalar needs quotes.
+      static bool mustQuote(StringRef) { return true; }
+    };
+
+Block Scalars
+-------------
+
+YAML block scalars are string literals that are represented in YAML using the
+literal block notation, just like the example shown below:
+
+.. code-block:: yaml
+
+    text: |
+      First line
+      Second line
+
+The YAML I/O library provides support for translating between YAML block scalars
+and specific C++ types by allowing you to specialize BlockScalarTraits<> on
+your data type. The library doesn't provide any built-in support for block
+scalar I/O for types like std::string and llvm::StringRef as they are already
+supported by YAML I/O and use the ordinary scalar notation by default.
+
+BlockScalarTraits specializations are very similar to the
+ScalarTraits specialization - YAML I/O will provide the native type and your
+specialization must create a temporary llvm::StringRef when writing, and
+it will also provide an llvm::StringRef that has the value of that block scalar
+and your specialization must convert that to your native data type when reading.
+An example of a custom type with an appropriate specialization of
+BlockScalarTraits is shown below:
+
+.. code-block:: c++
+
+    using llvm::yaml::BlockScalarTraits;
+    using llvm::yaml::IO;
+
+    struct MyStringType {
+      std::string Str;
+    };
+
+    template <>
+    struct BlockScalarTraits<MyStringType> {
+      static void output(const MyStringType &Value, void *Ctxt,
+                         llvm::raw_ostream &OS) {
+        OS << Value.Str;
+      }
+
+      static StringRef input(StringRef Scalar, void *Ctxt,
+                             MyStringType &Value) {
+        Value.Str = Scalar.str();
+        return StringRef();
       }
     };
+
     
 
 Mappings
@@ -685,6 +773,31 @@ because it is a programming error to have invalid struct values.
       }
     };
 
+Flow Mapping
+------------
+A YAML "flow mapping" is a mapping that uses the inline notation
+(e.g { x: 1, y: 0 } ) when written to YAML. To specify that a type should be
+written in YAML using flow mapping, your MappingTraits specialization should
+add "static const bool flow = true;". For instance:
+
+.. code-block:: c++
+
+    using llvm::yaml::MappingTraits;
+    using llvm::yaml::IO;
+
+    struct Stuff {
+      ...
+    };
+
+    template <>
+    struct MappingTraits<Stuff> {
+      static void mapping(IO &io, Stuff &stuff) {
+        ...
+      }
+
+      static const bool flow = true;
+    }
+
 
 Sequence
 ========
@@ -729,7 +842,7 @@ add "static const bool flow = true;".  For instance:
   };
 
 With the above, if you used MyList as the data type in your native data 
-structures, then then when converted to YAML, a flow sequence of integers 
+structures, then when converted to YAML, a flow sequence of integers 
 will be used (e.g. [ 10, -3, 4 ]).
 
 

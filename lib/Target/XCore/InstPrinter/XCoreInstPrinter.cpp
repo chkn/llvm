@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "asm-printer"
 #include "XCoreInstPrinter.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCExpr.h"
@@ -22,6 +21,8 @@
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
+#define DEBUG_TYPE "asm-printer"
+
 #include "XCoreGenAsmWriter.inc"
 
 void XCoreInstPrinter::printRegName(raw_ostream &OS, unsigned RegNo) const {
@@ -29,7 +30,7 @@ void XCoreInstPrinter::printRegName(raw_ostream &OS, unsigned RegNo) const {
 }
 
 void XCoreInstPrinter::printInst(const MCInst *MI, raw_ostream &O,
-                                 StringRef Annot) {
+                                 StringRef Annot, const MCSubtargetInfo &STI) {
   printInstruction(MI, O);
   printAnnotation(O, Annot);
 }

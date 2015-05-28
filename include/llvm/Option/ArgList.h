@@ -11,10 +11,13 @@
 #define LLVM_OPTION_ARGLIST_H
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Option/OptSpecifier.h"
 #include "llvm/Option/Option.h"
 #include <list>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -51,10 +54,10 @@ public:
   typedef std::forward_iterator_tag   iterator_category;
   typedef std::ptrdiff_t              difference_type;
 
-  arg_iterator(SmallVectorImpl<Arg*>::const_iterator it,
-                const ArgList &_Args, OptSpecifier _Id0 = 0U,
-                OptSpecifier _Id1 = 0U, OptSpecifier _Id2 = 0U)
-    : Current(it), Args(_Args), Id0(_Id0), Id1(_Id1), Id2(_Id2) {
+  arg_iterator(SmallVectorImpl<Arg *>::const_iterator it, const ArgList &Args,
+               OptSpecifier Id0 = 0U, OptSpecifier Id1 = 0U,
+               OptSpecifier Id2 = 0U)
+      : Current(it), Args(Args), Id0(Id0), Id1(Id1), Id2(Id2) {
     SkipToNextArg();
   }
 
@@ -90,8 +93,8 @@ public:
 /// and to iterate over groups of arguments.
 class ArgList {
 private:
-  ArgList(const ArgList &) LLVM_DELETED_FUNCTION;
-  void operator=(const ArgList &) LLVM_DELETED_FUNCTION;
+  ArgList(const ArgList &) = delete;
+  void operator=(const ArgList &) = delete;
 
 public:
   typedef SmallVector<Arg*, 16> arglist_type;
@@ -105,10 +108,14 @@ private:
   arglist_type Args;
 
 protected:
-  ArgList();
+  // Default ctor provided explicitly as it is not provided implicitly due to
+  // the presence of the (deleted) copy ctor above.
+  ArgList() { }
+  // Virtual to provide a vtable anchor and because -Wnon-virtua-dtor warns, not
+  // because this type is ever actually destroyed polymorphically.
+  virtual ~ArgList();
 
 public:
-  virtual ~ArgList();
 
   /// @name Arg Access
   /// @{
@@ -145,6 +152,12 @@ public:
     return arg_iterator(Args.end(), *this);
   }
 
+  iterator_range<arg_iterator> filtered(OptSpecifier Id0 = 0U,
+                                        OptSpecifier Id1 = 0U,
+                                        OptSpecifier Id2 = 0U) const {
+    return make_range(filtered_begin(Id0, Id1, Id2), filtered_end());
+  }
+
   /// @}
   /// @name Arg Removal
   /// @{
@@ -160,22 +173,27 @@ public:
   ///
   /// \p Claim Whether the argument should be claimed, if it exists.
   bool hasArgNoClaim(OptSpecifier Id) const {
-    return getLastArgNoClaim(Id) != 0;
+    return getLastArgNoClaim(Id) != nullptr;
   }
   bool hasArg(OptSpecifier Id) const {
-    return getLastArg(Id) != 0;
+    return getLastArg(Id) != nullptr;
   }
   bool hasArg(OptSpecifier Id0, OptSpecifier Id1) const {
-    return getLastArg(Id0, Id1) != 0;
+    return getLastArg(Id0, Id1) != nullptr;
   }
   bool hasArg(OptSpecifier Id0, OptSpecifier Id1, OptSpecifier Id2) const {
-    return getLastArg(Id0, Id1, Id2) != 0;
+    return getLastArg(Id0, Id1, Id2) != nullptr;
   }
 
   /// getLastArg - Return the last argument matching \p Id, or null.
   ///
   /// \p Claim Whether the argument should be claimed, if it exists.
   Arg *getLastArgNoClaim(OptSpecifier Id) const;
+  Arg *getLastArgNoClaim(OptSpecifier Id0, OptSpecifier Id1) const;
+  Arg *getLastArgNoClaim(OptSpecifier Id0, OptSpecifier Id1,
+                         OptSpecifier Id2) const;
+  Arg *getLastArgNoClaim(OptSpecifier Id0, OptSpecifier Id1, OptSpecifier Id2,
+                         OptSpecifier Id3) const;
   Arg *getLastArg(OptSpecifier Id) const;
   Arg *getLastArg(OptSpecifier Id0, OptSpecifier Id1) const;
   Arg *getLastArg(OptSpecifier Id0, OptSpecifier Id1, OptSpecifier Id2) const;
@@ -265,16 +283,13 @@ public:
   /// @name Arg Synthesis
   /// @{
 
-  /// MakeArgString - Construct a constant string pointer whose
+  /// Construct a constant string pointer whose
   /// lifetime will match that of the ArgList.
-  virtual const char *MakeArgString(StringRef Str) const = 0;
-  const char *MakeArgString(const char *Str) const {
-    return MakeArgString(StringRef(Str));
+  virtual const char *MakeArgStringRef(StringRef Str) const = 0;
+  const char *MakeArgString(const Twine &Str) const {
+    SmallString<256> Buf;
+    return MakeArgStringRef(Str.toStringRef(Buf));
   }
-  const char *MakeArgString(std::string Str) const {
-    return MakeArgString(StringRef(Str));
-  }
-  const char *MakeArgString(const Twine &Str) const;
 
   /// \brief Create an arg string for (\p LHS + \p RHS), reusing the
   /// string at \p Index if possible.
@@ -305,13 +320,13 @@ private:
 
 public:
   InputArgList(const char* const *ArgBegin, const char* const *ArgEnd);
-  ~InputArgList();
+  ~InputArgList() override;
 
-  virtual const char *getArgString(unsigned Index) const {
+  const char *getArgString(unsigned Index) const override {
     return ArgStrings[Index];
   }
 
-  virtual unsigned getNumInputArgStrings() const {
+  unsigned getNumInputArgStrings() const override {
     return NumInputArgStrings;
   }
 
@@ -323,7 +338,8 @@ public:
   unsigned MakeIndex(StringRef String0) const;
   unsigned MakeIndex(StringRef String0, StringRef String1) const;
 
-  virtual const char *MakeArgString(StringRef Str) const;
+  using ArgList::MakeArgString;
+  const char *MakeArgStringRef(StringRef Str) const override;
 
   /// @}
 };
@@ -334,18 +350,18 @@ class DerivedArgList : public ArgList {
   const InputArgList &BaseArgs;
 
   /// The list of arguments we synthesized.
-  mutable arglist_type SynthesizedArgs;
+  mutable SmallVector<std::unique_ptr<Arg>, 16> SynthesizedArgs;
 
 public:
   /// Construct a new derived arg list from \p BaseArgs.
   DerivedArgList(const InputArgList &BaseArgs);
-  ~DerivedArgList();
+  ~DerivedArgList() override;
 
-  virtual const char *getArgString(unsigned Index) const {
+  const char *getArgString(unsigned Index) const override {
     return BaseArgs.getArgString(Index);
   }
 
-  virtual unsigned getNumInputArgStrings() const {
+  unsigned getNumInputArgStrings() const override {
     return BaseArgs.getNumInputArgStrings();
   }
 
@@ -358,11 +374,10 @@ public:
 
   /// AddSynthesizedArg - Add a argument to the list of synthesized arguments
   /// (to be freed).
-  void AddSynthesizedArg(Arg *A) {
-    SynthesizedArgs.push_back(A);
-  }
+  void AddSynthesizedArg(Arg *A);
 
-  virtual const char *MakeArgString(StringRef Str) const;
+  using ArgList::MakeArgString;
+  const char *MakeArgStringRef(StringRef Str) const override;
 
   /// AddFlagArg - Construct a new FlagArg for the given option \p Id and
   /// append it to the argument list.

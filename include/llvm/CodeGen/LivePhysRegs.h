@@ -26,8 +26,8 @@
 // %XMM0<def> = ..., %YMM0<imp-use> (%YMM0 and all its sub-registers are alive)
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CODEGEN_LIVE_PHYS_REGS_H
-#define LLVM_CODEGEN_LIVE_PHYS_REGS_H
+#ifndef LLVM_CODEGEN_LIVEPHYSREGS_H
+#define LLVM_CODEGEN_LIVEPHYSREGS_H
 
 #include "llvm/ADT/SparseSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -44,11 +44,11 @@ class LivePhysRegs {
   const TargetRegisterInfo *TRI;
   SparseSet<unsigned> LiveRegs;
 
-  LivePhysRegs(const LivePhysRegs&) LLVM_DELETED_FUNCTION;
-  LivePhysRegs &operator=(const LivePhysRegs&) LLVM_DELETED_FUNCTION;
+  LivePhysRegs(const LivePhysRegs&) = delete;
+  LivePhysRegs &operator=(const LivePhysRegs&) = delete;
 public:
   /// \brief Constructs a new empty LivePhysRegs set.
-  LivePhysRegs() : TRI(0), LiveRegs() {}
+  LivePhysRegs() : TRI(nullptr), LiveRegs() {}
 
   /// \brief Constructs and initialize an empty LivePhysRegs set.
   LivePhysRegs(const TargetRegisterInfo *TRI) : TRI(TRI) {
@@ -57,9 +57,9 @@ public:
   }
 
   /// \brief Clear and initialize the LivePhysRegs set.
-  void init(const TargetRegisterInfo *_TRI) {
-    assert(_TRI && "Invalid TargetRegisterInfo pointer.");
-    TRI = _TRI;
+  void init(const TargetRegisterInfo *TRI) {
+    assert(TRI && "Invalid TargetRegisterInfo pointer.");
+    this->TRI = TRI;
     LiveRegs.clear();
     LiveRegs.setUniverse(TRI->getNumRegs());
   }
@@ -93,7 +93,8 @@ public:
   }
 
   /// \brief Removes physical registers clobbered by the regmask operand @p MO.
-  void removeRegsInMask(const MachineOperand &MO);
+  void removeRegsInMask(const MachineOperand &MO,
+        SmallVectorImpl<std::pair<unsigned, const MachineOperand*>> *Clobbers);
 
   /// \brief Returns true if register @p Reg is contained in the set. This also
   /// works if only the super register of @p Reg has been defined, because we
@@ -109,7 +110,11 @@ public:
   /// instruction(bundle): Remove killed-uses, add defs. This is the not
   /// recommended way, because it depends on accurate kill flags. If possible
   /// use stepBackwards() instead of this function.
-  void stepForward(const MachineInstr &MI);
+  /// The clobbers set will be the list of registers either defined or clobbered
+  /// by a regmask.  The operand will identify whether this is a regmask or
+  /// register operand.
+  void stepForward(const MachineInstr &MI,
+        SmallVectorImpl<std::pair<unsigned, const MachineOperand*>> &Clobbers);
 
   /// \brief Adds all live-in registers of basic block @p MBB.
   void addLiveIns(const MachineBasicBlock *MBB) {
@@ -143,4 +148,4 @@ inline raw_ostream &operator<<(raw_ostream &OS, const LivePhysRegs& LR) {
 
 } // namespace llvm
 
-#endif // LLVM_CODEGEN_LIVE_PHYS_REGS_H
+#endif

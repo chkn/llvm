@@ -16,7 +16,7 @@ entry:
 ; THUMB: [[NEXTADDR_PCBASE:LPC0_[0-9]]]:
 ; THUMB: add r[[NEXTADDR_REG]], pc
 
-  %0 = load i8** @nextaddr, align 4               ; <i8*> [#uses=2]
+  %0 = load i8*, i8** @nextaddr, align 4               ; <i8*> [#uses=2]
   %1 = icmp eq i8* %0, null                       ; <i1> [#uses=1]
 ; indirect branch gets duplicated here
 ; ARM: bx
@@ -31,8 +31,8 @@ bb2:                                              ; preds = %entry, %bb3
   indirectbr i8* %gotovar.4.0, [label %L5, label %L4, label %L3, label %L2, label %L1]
 
 bb3:                                              ; preds = %entry
-  %2 = getelementptr inbounds [5 x i8*]* @C.0.2070, i32 0, i32 %i ; <i8**> [#uses=1]
-  %gotovar.4.0.pre = load i8** %2, align 4        ; <i8*> [#uses=1]
+  %2 = getelementptr inbounds [5 x i8*], [5 x i8*]* @C.0.2070, i32 0, i32 %i ; <i8**> [#uses=1]
+  %gotovar.4.0.pre = load i8*, i8** %2, align 4        ; <i8*> [#uses=1]
   br label %bb2
 
 L5:                                               ; preds = %bb2
@@ -69,7 +69,7 @@ L1:                                               ; preds = %L2, %bb2
   store i8* blockaddress(@foo, %L5), i8** @nextaddr, align 4
   ret i32 %res.3
 }
-; ARM: .long Ltmp1-(LPC{{.*}}+8)
-; THUMB: .long Ltmp1-(LPC{{.*}}+4)
+; ARM: .long Ltmp0-(LPC{{.*}}+8)
+; THUMB: .long Ltmp0-(LPC{{.*}}+4)
 ; THUMB: .long _nextaddr-([[NEXTADDR_PCBASE]]+4)
-; THUMB2: .long Ltmp1
+; THUMB2: .long Ltmp0

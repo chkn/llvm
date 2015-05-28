@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstring>
 #include <iterator>
+#include <utility>
 
 namespace llvm {
 
@@ -62,10 +63,8 @@ protected:
 
   // Helpers to copy and move construct a SmallPtrSet.
   SmallPtrSetImplBase(const void **SmallStorage, const SmallPtrSetImplBase &that);
-#if LLVM_HAS_RVALUE_REFERENCES
   SmallPtrSetImplBase(const void **SmallStorage, unsigned SmallSize,
                   SmallPtrSetImplBase &&that);
-#endif
   explicit SmallPtrSetImplBase(const void **SmallStorage, unsigned SmallSize) :
     SmallArray(SmallStorage), CurArray(SmallStorage), CurArraySize(SmallSize) {
     assert(SmallSize && (SmallSize & (SmallSize-1)) == 0 &&
@@ -75,8 +74,9 @@ protected:
   ~SmallPtrSetImplBase();
 
 public:
+  typedef unsigned size_type;
   bool LLVM_ATTRIBUTE_UNUSED_RESULT empty() const { return size() == 0; }
-  unsigned size() const { return NumElements; }
+  size_type size() const { return NumElements; }
 
   void clear() {
     // If the capacity of the array is huge, and the # elements used is small,
@@ -101,7 +101,7 @@ protected:
   /// insert_imp - This returns true if the pointer was new to the set, false if
   /// it was already in the set.  This is hidden from the client so that the
   /// derived class can check that the right type of pointer is passed in.
-  bool insert_imp(const void * Ptr);
+  std::pair<const void *const *, bool> insert_imp(const void *Ptr);
 
   /// erase_imp - If the set contains the specified pointer, remove it and
   /// return true, otherwise return false.  This is hidden from the client so
@@ -132,16 +132,14 @@ private:
   /// Grow - Allocate a larger backing store for the buckets and move it over.
   void Grow(unsigned NewSize);
 
-  void operator=(const SmallPtrSetImplBase &RHS) LLVM_DELETED_FUNCTION;
+  void operator=(const SmallPtrSetImplBase &RHS) = delete;
 protected:
   /// swap - Swaps the elements of two sets.
   /// Note: This method assumes that both sets have the same small size.
   void swap(SmallPtrSetImplBase &RHS);
 
   void CopyFrom(const SmallPtrSetImplBase &RHS);
-#if LLVM_HAS_RVALUE_REFERENCES
   void MoveFrom(unsigned SmallSize, SmallPtrSetImplBase &&RHS);
-#endif
 };
 
 /// SmallPtrSetIteratorImpl - This is the common base class shared between all
@@ -243,23 +241,29 @@ struct RoundUpToPowerOfTwo {
 template <typename PtrType>
 class SmallPtrSetImpl : public SmallPtrSetImplBase {
   typedef PointerLikeTypeTraits<PtrType> PtrTraits;
+
+  SmallPtrSetImpl(const SmallPtrSetImpl&) = delete;
 protected:
   // Constructors that forward to the base.
   SmallPtrSetImpl(const void **SmallStorage, const SmallPtrSetImpl &that)
       : SmallPtrSetImplBase(SmallStorage, that) {}
-#if LLVM_HAS_RVALUE_REFERENCES
   SmallPtrSetImpl(const void **SmallStorage, unsigned SmallSize,
                   SmallPtrSetImpl &&that)
       : SmallPtrSetImplBase(SmallStorage, SmallSize, std::move(that)) {}
-#endif
   explicit SmallPtrSetImpl(const void **SmallStorage, unsigned SmallSize)
       : SmallPtrSetImplBase(SmallStorage, SmallSize) {}
 
 public:
-  /// insert - This returns true if the pointer was new to the set, false if it
-  /// was already in the set.
-  bool insert(PtrType Ptr) {
-    return insert_imp(PtrTraits::getAsVoidPointer(Ptr));
+  typedef SmallPtrSetIterator<PtrType> iterator;
+  typedef SmallPtrSetIterator<PtrType> const_iterator;
+
+  /// Inserts Ptr if and only if there is no element in the container equal to
+  /// Ptr. The bool component of the returned pair is true if and only if the
+  /// insertion takes place, and the iterator component of the pair points to
+  /// the element equal to Ptr.
+  std::pair<iterator, bool> insert(PtrType Ptr) {
+    auto p = insert_imp(PtrTraits::getAsVoidPointer(Ptr));
+    return std::make_pair(iterator(p.first, CurArray + CurArraySize), p.second);
   }
 
   /// erase - If the set contains the specified pointer, remove it and return
@@ -269,7 +273,7 @@ public:
   }
 
   /// count - Return 1 if the specified pointer is in the set, 0 otherwise.
-  unsigned count(PtrType Ptr) const {
+  size_type count(PtrType Ptr) const {
     return count_imp(PtrTraits::getAsVoidPointer(Ptr)) ? 1 : 0;
   }
 
@@ -279,8 +283,6 @@ public:
       insert(*I);
   }
 
-  typedef SmallPtrSetIterator<PtrType> iterator;
-  typedef SmallPtrSetIterator<PtrType> const_iterator;
   inline iterator begin() const {
     return iterator(CurArray, CurArray+CurArraySize);
   }
@@ -304,10 +306,8 @@ class SmallPtrSet : public SmallPtrSetImpl<PtrType> {
 public:
   SmallPtrSet() : BaseT(SmallStorage, SmallSizePowTwo) {}
   SmallPtrSet(const SmallPtrSet &that) : BaseT(SmallStorage, that) {}
-#if LLVM_HAS_RVALUE_REFERENCES
   SmallPtrSet(SmallPtrSet &&that)
       : BaseT(SmallStorage, SmallSizePowTwo, std::move(that)) {}
-#endif
 
   template<typename It>
   SmallPtrSet(It I, It E) : BaseT(SmallStorage, SmallSizePowTwo) {
@@ -321,14 +321,12 @@ public:
     return *this;
   }
 
-#if LLVM_HAS_RVALUE_REFERENCES
   SmallPtrSet<PtrType, SmallSize>&
   operator=(SmallPtrSet<PtrType, SmallSize> &&RHS) {
     if (&RHS != this)
       this->MoveFrom(SmallSizePowTwo, std::move(RHS));
     return *this;
   }
-#endif
 
   /// swap - Swaps the elements of two sets.
   void swap(SmallPtrSet<PtrType, SmallSize> &RHS) {

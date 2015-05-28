@@ -15,20 +15,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "break-crit-edges"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Support/CFG.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 using namespace llvm;
+
+#define DEBUG_TYPE "break-crit-edges"
 
 STATISTIC(NumBroken, "Number of blocks inserted");
 
@@ -39,11 +41,20 @@ namespace {
       initializeBreakCriticalEdgesPass(*PassRegistry::getPassRegistry());
     }
 
-    virtual bool runOnFunction(Function &F);
+    bool runOnFunction(Function &F) override {
+      auto *DTWP = getAnalysisIfAvailable<DominatorTreeWrapperPass>();
+      auto *DT = DTWP ? &DTWP->getDomTree() : nullptr;
+      auto *LIWP = getAnalysisIfAvailable<LoopInfoWrapperPass>();
+      auto *LI = LIWP ? &LIWP->getLoopInfo() : nullptr;
+      unsigned N =
+          SplitAllCriticalEdges(F, CriticalEdgeSplittingOptions(DT, LI));
+      NumBroken += N;
+      return N > 0;
+    }
 
-    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+    void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.addPreserved<DominatorTreeWrapperPass>();
-      AU.addPreserved<LoopInfo>();
+      AU.addPreserved<LoopInfoWrapperPass>();
 
       // No loop canonicalization guarantees are broken by this pass.
       AU.addPreservedID(LoopSimplifyID);
@@ -59,24 +70,6 @@ INITIALIZE_PASS(BreakCriticalEdges, "break-crit-edges",
 char &llvm::BreakCriticalEdgesID = BreakCriticalEdges::ID;
 FunctionPass *llvm::createBreakCriticalEdgesPass() {
   return new BreakCriticalEdges();
-}
-
-// runOnFunction - Loop over all of the edges in the CFG, breaking critical
-// edges as they are found.
-//
-bool BreakCriticalEdges::runOnFunction(Function &F) {
-  bool Changed = false;
-  for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I) {
-    TerminatorInst *TI = I->getTerminator();
-    if (TI->getNumSuccessors() > 1 && !isa<IndirectBrInst>(TI))
-      for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
-        if (SplitCriticalEdge(TI, i, this)) {
-          ++NumBroken;
-          Changed = true;
-        }
-  }
-
-  return Changed;
 }
 
 //===----------------------------------------------------------------------===//
@@ -138,10 +131,9 @@ static void createPHIsForSplitLoopExit(ArrayRef<BasicBlock *> Preds,
 /// to.
 ///
 BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
-                                    Pass *P, bool MergeIdenticalEdges,
-                                    bool DontDeleteUselessPhis,
-                                    bool SplitLandingPads) {
-  if (!isCriticalEdge(TI, SuccNum, MergeIdenticalEdges)) return 0;
+                                    const CriticalEdgeSplittingOptions &Options) {
+  if (!isCriticalEdge(TI, SuccNum, Options.MergeIdenticalEdges))
+    return nullptr;
 
   assert(!isa<IndirectBrInst>(TI) &&
          "Cannot split critical edge from IndirectBrInst");
@@ -151,7 +143,7 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
 
   // Splitting the critical edge to a landing pad block is non-trivial. Don't do
   // it in this generic function.
-  if (DestBB->isLandingPad()) return 0;
+  if (DestBB->isLandingPad()) return nullptr;
 
   // Create a new basic block, linking it into the CFG.
   BasicBlock *NewBB = BasicBlock::Create(TI->getContext(),
@@ -192,30 +184,23 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
   // If there are any other edges from TIBB to DestBB, update those to go
   // through the split block, making those edges non-critical as well (and
   // reducing the number of phi entries in the DestBB if relevant).
-  if (MergeIdenticalEdges) {
+  if (Options.MergeIdenticalEdges) {
     for (unsigned i = SuccNum+1, e = TI->getNumSuccessors(); i != e; ++i) {
       if (TI->getSuccessor(i) != DestBB) continue;
 
       // Remove an entry for TIBB from DestBB phi nodes.
-      DestBB->removePredecessor(TIBB, DontDeleteUselessPhis);
+      DestBB->removePredecessor(TIBB, Options.DontDeleteUselessPHIs);
 
       // We found another edge to DestBB, go to NewBB instead.
       TI->setSuccessor(i, NewBB);
     }
   }
 
-
-
-  // If we don't have a pass object, we can't update anything...
-  if (P == 0) return NewBB;
-
-  DominatorTreeWrapperPass *DTWP =
-      P->getAnalysisIfAvailable<DominatorTreeWrapperPass>();
-  DominatorTree *DT = DTWP ? &DTWP->getDomTree() : 0;
-  LoopInfo *LI = P->getAnalysisIfAvailable<LoopInfo>();
-
   // If we have nothing to update, just return.
-  if (DT == 0 && LI == 0)
+  auto *AA = Options.AA;
+  auto *DT = Options.DT;
+  auto *LI = Options.LI;
+  if (!DT && !LI)
     return NewBB;
 
   // Now update analysis information.  Since the only predecessor of NewBB is
@@ -251,7 +236,7 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
     //
     if (TINode) {       // Don't break unreachable code!
       DomTreeNode *NewBBNode = DT->addNewBlock(NewBB, TIBB);
-      DomTreeNode *DestBBNode = 0;
+      DomTreeNode *DestBBNode = nullptr;
 
       // If NewBBDominatesDestBB hasn't been computed yet, do so with DT.
       if (!OtherPreds.empty()) {
@@ -281,13 +266,13 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
       if (Loop *DestLoop = LI->getLoopFor(DestBB)) {
         if (TIL == DestLoop) {
           // Both in the same loop, the NewBB joins loop.
-          DestLoop->addBasicBlockToLoop(NewBB, LI->getBase());
+          DestLoop->addBasicBlockToLoop(NewBB, *LI);
         } else if (TIL->contains(DestLoop)) {
           // Edge from an outer loop to an inner loop.  Add to the outer loop.
-          TIL->addBasicBlockToLoop(NewBB, LI->getBase());
+          TIL->addBasicBlockToLoop(NewBB, *LI);
         } else if (DestLoop->contains(TIL)) {
           // Edge from an inner loop to an outer loop.  Add to the outer loop.
-          DestLoop->addBasicBlockToLoop(NewBB, LI->getBase());
+          DestLoop->addBasicBlockToLoop(NewBB, *LI);
         } else {
           // Edge from two loops with no containment relation.  Because these
           // are natural loops, we know that the destination block must be the
@@ -296,19 +281,20 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
           assert(DestLoop->getHeader() == DestBB &&
                  "Should not create irreducible loops!");
           if (Loop *P = DestLoop->getParentLoop())
-            P->addBasicBlockToLoop(NewBB, LI->getBase());
+            P->addBasicBlockToLoop(NewBB, *LI);
         }
       }
+
       // If TIBB is in a loop and DestBB is outside of that loop, we may need
       // to update LoopSimplify form and LCSSA form.
-      if (!TIL->contains(DestBB) &&
-          P->mustPreserveAnalysisID(LoopSimplifyID)) {
+      if (!TIL->contains(DestBB)) {
         assert(!TIL->contains(NewBB) &&
                "Split point for loop exit is contained in loop!");
 
         // Update LCSSA form in the newly created exit block.
-        if (P->mustPreserveAnalysisID(LCSSAID))
+        if (Options.PreserveLCSSA) {
           createPHIsForSplitLoopExit(TIBB, NewBB, DestBB);
+        }
 
         // The only that we can break LoopSimplify form by splitting a critical
         // edge is if after the split there exists some edge from TIL to DestBB
@@ -335,20 +321,12 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
         if (!LoopPreds.empty()) {
           assert(!DestBB->isLandingPad() &&
                  "We don't split edges to landing pads!");
-          BasicBlock *NewExitBB =
-              SplitBlockPredecessors(DestBB, LoopPreds, "split", P);
-          if (P->mustPreserveAnalysisID(LCSSAID))
+          BasicBlock *NewExitBB = SplitBlockPredecessors(
+              DestBB, LoopPreds, "split", AA, DT, LI, Options.PreserveLCSSA);
+          if (Options.PreserveLCSSA)
             createPHIsForSplitLoopExit(LoopPreds, NewExitBB, DestBB);
         }
       }
-      // LCSSA form was updated above for the case where LoopSimplify is
-      // available, which means that all predecessors of loop exit blocks
-      // are within the loop. Without LoopSimplify form, it would be
-      // necessary to insert a new phi.
-      assert((!P->mustPreserveAnalysisID(LCSSAID) ||
-              P->mustPreserveAnalysisID(LoopSimplifyID)) &&
-             "SplitCriticalEdge doesn't know how to update LCCSA form "
-             "without LoopSimplify!");
     }
   }
 

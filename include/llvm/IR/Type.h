@@ -94,11 +94,11 @@ protected:
   friend class LLVMContextImpl;
   explicit Type(LLVMContext &C, TypeID tid)
     : Context(C), IDAndSubclassData(0),
-      NumContainedTys(0), ContainedTys(0), HasMetadata(0) {
+      NumContainedTys(0), ContainedTys(nullptr), HasMetadata(0) {
     setTypeID(tid);
   }
-  ~Type() {}
-  
+  ~Type() = default;
+
   void setTypeID(TypeID ID) {
     IDAndSubclassData = (ID & 0xFF) | (IDAndSubclassData & 0xFFFFFF00);
     assert(getTypeID() == ID && "TypeID data too large for field");
@@ -277,7 +277,7 @@ public:
   /// get the actual size for a particular target, it is reasonable to use the
   /// DataLayout subsystem to do this.
   ///
-  bool isSized(SmallPtrSet<const Type*, 4> *Visited = 0) const {
+  bool isSized(SmallPtrSetImpl<const Type*> *Visited = nullptr) const {
     // If it's a primitive, it is always sized.
     if (getTypeID() == IntegerTyID || isFloatingPointTy() ||
         getTypeID() == PointerTyID ||
@@ -325,6 +325,9 @@ public:
   typedef Type * const *subtype_iterator;
   subtype_iterator subtype_begin() const { return ContainedTys; }
   subtype_iterator subtype_end() const { return &ContainedTys[NumContainedTys];}
+  ArrayRef<Type*> subtypes() const {
+    return makeArrayRef(subtype_begin(), subtype_end());
+  }
 
   typedef std::reverse_iterator<subtype_iterator> subtype_reverse_iterator;
   subtype_reverse_iterator subtype_rbegin() const {
@@ -335,7 +338,7 @@ public:
   }
 
   /// getContainedType - This method is used to implement the type iterator
-  /// (defined a the end of the file).  For derived types, this returns the
+  /// (defined at the end of the file).  For derived types, this returns the
   /// types 'contained' in the derived type.
   ///
   Type *getContainedType(unsigned i) const {
@@ -404,7 +407,8 @@ public:
   static IntegerType *getInt16Ty(LLVMContext &C);
   static IntegerType *getInt32Ty(LLVMContext &C);
   static IntegerType *getInt64Ty(LLVMContext &C);
-
+  static IntegerType *getInt128Ty(LLVMContext &C);
+  
   //===--------------------------------------------------------------------===//
   // Convenience methods for getting pointer types with one of the above builtin
   // types as pointee.
@@ -487,7 +491,7 @@ private:
   /// isSizedDerivedType - Derived types like structures and arrays are sized
   /// iff all of the members of the type are sized as well.  Since asking for
   /// their size is relatively uncommon, move this operation out of line.
-  bool isSizedDerivedType(SmallPtrSet<const Type*, 4> *Visited = 0) const;
+  bool isSizedDerivedType(SmallPtrSetImpl<const Type*> *Visited = nullptr) const;
 };
 
 // Printing of types.

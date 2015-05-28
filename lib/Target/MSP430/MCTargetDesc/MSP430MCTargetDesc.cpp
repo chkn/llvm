@@ -20,6 +20,8 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/TargetRegistry.h"
 
+using namespace llvm;
+
 #define GET_INSTRINFO_MC_DESC
 #include "MSP430GenInstrInfo.inc"
 
@@ -29,8 +31,6 @@
 #define GET_REGINFO_MC_DESC
 #include "MSP430GenRegisterInfo.inc"
 
-using namespace llvm;
-
 static MCInstrInfo *createMSP430MCInstrInfo() {
   MCInstrInfo *X = new MCInstrInfo();
   InitMSP430MCInstrInfo(X);
@@ -39,7 +39,7 @@ static MCInstrInfo *createMSP430MCInstrInfo() {
 
 static MCRegisterInfo *createMSP430MCRegisterInfo(StringRef TT) {
   MCRegisterInfo *X = new MCRegisterInfo();
-  InitMSP430MCRegisterInfo(X, MSP430::PCW);
+  InitMSP430MCRegisterInfo(X, MSP430::PC);
   return X;
 }
 
@@ -54,19 +54,18 @@ static MCCodeGenInfo *createMSP430MCCodeGenInfo(StringRef TT, Reloc::Model RM,
                                                 CodeModel::Model CM,
                                                 CodeGenOpt::Level OL) {
   MCCodeGenInfo *X = new MCCodeGenInfo();
-  X->InitMCCodeGenInfo(RM, CM, OL);
+  X->initMCCodeGenInfo(RM, CM, OL);
   return X;
 }
 
-static MCInstPrinter *createMSP430MCInstPrinter(const Target &T,
+static MCInstPrinter *createMSP430MCInstPrinter(const Triple &T,
                                                 unsigned SyntaxVariant,
                                                 const MCAsmInfo &MAI,
                                                 const MCInstrInfo &MII,
-                                                const MCRegisterInfo &MRI,
-                                                const MCSubtargetInfo &STI) {
+                                                const MCRegisterInfo &MRI) {
   if (SyntaxVariant == 0)
     return new MSP430InstPrinter(MAI, MII, MRI);
-  return 0;
+  return nullptr;
 }
 
 extern "C" void LLVMInitializeMSP430TargetMC() {

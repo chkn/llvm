@@ -17,6 +17,8 @@ LLVMPackageName   := @PACKAGE_TARNAME@
 LLVMVersion       := @PACKAGE_VERSION@
 LLVM_VERSION_MAJOR := @LLVM_VERSION_MAJOR@
 LLVM_VERSION_MINOR := @LLVM_VERSION_MINOR@
+LLVM_VERSION_PATCH := @LLVM_VERSION_PATCH@
+LLVM_VERSION_SUFFIX := @LLVM_VERSION_SUFFIX@
 LLVM_CONFIGTIME   := @LLVM_CONFIGTIME@
 
 ###########################################################################
@@ -55,6 +57,22 @@ LLVM_SRC_ROOT   := $(call realpath, @abs_top_srcdir@)
 LLVM_OBJ_ROOT   := $(call realpath, @abs_top_builddir@)
 PROJ_SRC_ROOT   := $(LLVM_SRC_ROOT)
 PROJ_SRC_DIR    := $(LLVM_SRC_ROOT)$(patsubst $(PROJ_OBJ_ROOT)%,%,$(PROJ_OBJ_DIR))
+
+# FIXME: This is temporary during the grace period where in-source builds are
+# deprecated. Convert to a hard error when that period is up.
+#
+# See: http://lists.cs.uiuc.edu/pipermail/llvm-commits/Week-of-Mon-20150323/268067.html
+ifeq ($(LLVM_SRC_ROOT), $(LLVM_OBJ_ROOT))
+  $(warning ######################################################################################)
+  $(warning #                                                                                    #)
+  $(warning #                                   WARNING                                          #)
+  $(warning #                                                                                    #)
+  $(warning #                        In-source builds are deprecated.                            #)
+  $(warning #                                                                                    #)
+  $(warning #               Please configure from a separate build directory!                    #)
+  $(warning #                                                                                    #)
+  $(warning ######################################################################################)
+endif
 
 ifneq ($(CLANG_SRC_ROOT),)
   CLANG_SRC_ROOT:= $(call realpath, $(CLANG_SRC_ROOT))
@@ -200,10 +218,8 @@ DOT        := @DOT@
 DOXYGEN    := @DOXYGEN@
 GROFF      := @GROFF@
 GZIPBIN    := @GZIPBIN@
-OCAMLC     := @OCAMLC@
-OCAMLOPT   := @OCAMLOPT@
-OCAMLDEP   := @OCAMLDEP@
-OCAMLDOC   := @OCAMLDOC@
+GO         := @GO@
+OCAMLFIND  := @OCAMLFIND@
 GAS        := @GAS@
 POD2HTML   := @POD2HTML@
 POD2MAN    := @POD2MAN@
@@ -214,6 +230,9 @@ HAVE_LIBZ  := @HAVE_LIBZ@
 HAVE_DLOPEN := @HAVE_DLOPEN@
 HAVE_PTHREAD := @HAVE_PTHREAD@
 HAVE_TERMINFO := @HAVE_TERMINFO@
+
+HAVE_OCAMLOPT := @HAVE_OCAMLOPT@
+HAVE_OCAML_OUNIT := @HAVE_OCAML_OUNIT@
 
 LIBS       := @LIBS@
 
@@ -244,17 +263,18 @@ RDYNAMIC := @RDYNAMIC@
 #ENABLE_LIBCPP = 0
 ENABLE_LIBCPP = @ENABLE_LIBCPP@
 
-# When ENABLE_CXX11 is enabled, LLVM uses c++11 mode by default to build.
-ENABLE_CXX11 = @ENABLE_CXX11@
+# When ENABLE_CXX1Y is enabled, LLVM uses c++1y mode by default to build.
+# Otherwise it uses the baseline c++11.
+ENABLE_CXX1Y = @ENABLE_CXX1Y@
 
 # When ENABLE_SPLIT_DWARF is enabled, LLVM uses -gfission to build in debug mode.
 ENABLE_SPLIT_DWARF = @ENABLE_SPLIT_DWARF@
 
+# When enabled, clang will have plugin support.
+CLANG_PLUGIN_SUPPORT = @CLANG_PLUGIN_SUPPORT@
+
 # When ENABLE_CLANG_ARCMT is enabled, clang will have ARCMigrationTool.
 ENABLE_CLANG_ARCMT = @ENABLE_CLANG_ARCMT@
-
-# When ENABLE_CLANG_REWRITER is enabled, clang will have Rewriter.
-ENABLE_CLANG_REWRITER = @ENABLE_CLANG_REWRITER@
 
 # When ENABLE_CLANG_STATIC_ANALYZER is enabled, clang will have StaticAnalyzer.
 ENABLE_CLANG_STATIC_ANALYZER = @ENABLE_CLANG_STATIC_ANALYZER@
@@ -288,6 +308,11 @@ ENABLE_TERMINFO = @ENABLE_TERMINFO@
 # code will include expensive checks, otherwise they are excluded.
 #ENABLE_EXPENSIVE_CHECKS = 0
 @ENABLE_EXPENSIVE_CHECKS@
+
+# --enable-abi-breaking-checks : decide whether we should compile in asserts and
+# checks that make the build ABI incompatible with an llvm built without these
+# checks enabled.
+ENABLE_ABI_BREAKING_CHECKS = @ENABLE_ABI_BREAKING_CHECKS@
 
 # When DEBUG_RUNTIME is enabled, the runtime libraries will retain debug
 # symbols.
@@ -367,7 +392,6 @@ HUGE_VAL_SANITY = @HUGE_VAL_SANITY@
 
 # Bindings that we should build
 BINDINGS_TO_BUILD := @BINDINGS_TO_BUILD@
-ALL_BINDINGS      := @ALL_BINDINGS@
 OCAML_LIBDIR      := @OCAML_LIBDIR@
 
 # When compiling under Mingw/Cygwin, executables such as tblgen
@@ -393,6 +417,8 @@ COVERED_SWITCH_DEFAULT = @COVERED_SWITCH_DEFAULT@
 NO_UNINITIALIZED = @NO_UNINITIALIZED@
 # -Wno-maybe-uninitialized
 NO_MAYBE_UNINITIALIZED = @NO_MAYBE_UNINITIALIZED@
+# -Wno-comment
+NO_COMMENT = @NO_COMMENT@
 
 # Was polly found in tools/polly?
 LLVM_HAS_POLLY = @LLVM_HAS_POLLY@

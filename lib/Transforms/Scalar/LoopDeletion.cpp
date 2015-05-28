@@ -14,7 +14,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "loop-delete"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -22,6 +21,8 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Dominators.h"
 using namespace llvm;
+
+#define DEBUG_TYPE "loop-delete"
 
 STATISTIC(NumDeleted, "Number of loops deleted");
 
@@ -34,18 +35,18 @@ namespace {
     }
 
     // Possibly eliminate loop L if it is dead.
-    bool runOnLoop(Loop *L, LPPassManager &LPM);
+    bool runOnLoop(Loop *L, LPPassManager &LPM) override;
 
-    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+    void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.addRequired<DominatorTreeWrapperPass>();
-      AU.addRequired<LoopInfo>();
+      AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<ScalarEvolution>();
       AU.addRequiredID(LoopSimplifyID);
       AU.addRequiredID(LCSSAID);
 
       AU.addPreserved<ScalarEvolution>();
       AU.addPreserved<DominatorTreeWrapperPass>();
-      AU.addPreserved<LoopInfo>();
+      AU.addPreserved<LoopInfoWrapperPass>();
       AU.addPreservedID(LoopSimplifyID);
       AU.addPreservedID(LCSSAID);
     }
@@ -62,7 +63,7 @@ char LoopDeletion::ID = 0;
 INITIALIZE_PASS_BEGIN(LoopDeletion, "loop-deletion",
                 "Delete dead loops", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopInfo)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_DEPENDENCY(LCSSA)
@@ -235,12 +236,11 @@ bool LoopDeletion::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   // Finally, the blocks from loopinfo.  This has to happen late because
   // otherwise our loop iterators won't work.
-  LoopInfo &loopInfo = getAnalysis<LoopInfo>();
+  LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   SmallPtrSet<BasicBlock*, 8> blocks;
   blocks.insert(L->block_begin(), L->block_end());
-  for (SmallPtrSet<BasicBlock*,8>::iterator I = blocks.begin(),
-       E = blocks.end(); I != E; ++I)
-    loopInfo.removeBlock(*I);
+  for (BasicBlock *BB : blocks)
+    loopInfo.removeBlock(BB);
 
   // The last step is to inform the loop pass manager that we've
   // eliminated this loop.

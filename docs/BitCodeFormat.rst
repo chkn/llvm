@@ -28,8 +28,9 @@ Unlike XML, the bitstream format is a binary encoding, and unlike XML it
 provides a mechanism for the file to self-describe "abbreviations", which are
 effectively size optimizations for the content.
 
-LLVM IR files may be optionally embedded into a `wrapper`_ structure that makes
-it easy to embed extra data along with LLVM IR files.
+LLVM IR files may be optionally embedded into a `wrapper`_ structure, or in a
+`native object file`_. Both of these mechanisms make it easy to embed extra
+data along with LLVM IR files.
 
 This document first describes the LLVM bitstream format, describes the wrapper
 format, then describes the record structure used by LLVM IR files.
@@ -460,6 +461,19 @@ to the start of the bitcode stream in the file, and the Size field is the size
 in bytes of the stream. CPUType is a target-specific value that can be used to
 encode the CPU of the target.
 
+.. _native object file:
+
+Native Object File Wrapper Format
+=================================
+
+Bitcode files for LLVM IR may also be wrapped in a native object file
+(i.e. ELF, COFF, Mach-O).  The bitcode must be stored in a section of the
+object file named ``.llvmbc``.  This wrapper format is useful for accommodating
+LTO in compilation pipelines where intermediate objects must be native object
+files which contain metadata in other sections.
+
+Not all tools support this format.
+
 .. _encoding of LLVM IR:
 
 LLVM IR Encoding
@@ -658,7 +672,7 @@ for each library name referenced.
 MODULE_CODE_GLOBALVAR Record
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``[GLOBALVAR, pointer type, isconst, initid, linkage, alignment, section, visibility, threadlocal, unnamed_addr, dllstorageclass]``
+``[GLOBALVAR, pointer type, isconst, initid, linkage, alignment, section, visibility, threadlocal, unnamed_addr, externally_initialized, dllstorageclass, comdat]``
 
 The ``GLOBALVAR`` record (code 7) marks the declaration or definition of a
 global variable. The operand fields are:
@@ -688,7 +702,8 @@ global variable. The operand fields are:
   * ``weak_odr``: code 10
   * ``linkonce_odr``: code 11
   * ``available_externally``: code 12
-  * ``linker_private``: code 13
+  * deprecated : code 13
+  * deprecated : code 14
 
 * alignment*: The logarithm base 2 of the variable's requested alignment, plus 1
 
@@ -713,7 +728,7 @@ global variable. The operand fields are:
 * *unnamed_addr*: If present and non-zero, indicates that the variable has
   ``unnamed_addr``
 
-.. _dllstorageclass:
+.. _bcdllstorageclass:
 
 * *dllstorageclass*: If present, an encoding of the DLL storage class of this variable:
 
@@ -726,7 +741,7 @@ global variable. The operand fields are:
 MODULE_CODE_FUNCTION Record
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``[FUNCTION, type, callingconv, isproto, linkage, paramattr, alignment, section, visibility, gc, prefix, dllstorageclass]``
+``[FUNCTION, type, callingconv, isproto, linkage, paramattr, alignment, section, visibility, gc, prologuedata, dllstorageclass, comdat, prefixdata]``
 
 The ``FUNCTION`` record (code 8) marks the declaration or definition of a
 function. The operand fields are:
@@ -746,8 +761,6 @@ function. The operand fields are:
   * ``arm_apcscc``: code 66
   * ``arm_aapcscc``: code 67
   * ``arm_aapcs_vfpcc``: code 68
-  * ``x86_thiscallcc``: code 70
-  * ``x86_cdeclmethodcc``: code 80
 
 * isproto*: Non-zero if this entry represents a declaration rather than a
   definition
@@ -771,10 +784,17 @@ function. The operand fields are:
 * *unnamed_addr*: If present and non-zero, indicates that the function has
   ``unnamed_addr``
 
-* *prefix*: If non-zero, the value index of the prefix data for this function,
+* *prologuedata*: If non-zero, the value index of the prologue data for this function,
   plus 1.
 
-* *dllstorageclass*: An encoding of the `dllstorageclass`_ of this function
+* *dllstorageclass*: An encoding of the
+  :ref:`dllstorageclass<bcdllstorageclass>` of this function
+
+* *comdat*: An encoding of the COMDAT of this function
+
+* *prefixdata*: If non-zero, the value index of the prefix data for this function,
+  plus 1.
+
 
 MODULE_CODE_ALIAS Record
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -792,7 +812,8 @@ fields are
 
 * *visibility*: If present, an encoding of the `visibility`_ of the alias
 
-* *dllstorageclass*: If present, an encoding of the `dllstorageclass`_ of the alias
+* *dllstorageclass*: If present, an encoding of the
+  :ref:`dllstorageclass<bcdllstorageclass>` of the alias
 
 MODULE_CODE_PURGEVALS Record
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1094,7 +1115,7 @@ named type.
 VALUE_SYMTAB_BLOCK Contents
 ---------------------------
 
-The ``VALUE_SYMTAB_BLOCK`` block (id 14) ... 
+The ``VALUE_SYMTAB_BLOCK`` block (id 14) ...
 
 .. _METADATA_BLOCK:
 

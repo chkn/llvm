@@ -38,7 +38,8 @@
 #define LLVM_ANALYSIS_ALIASANALYSIS_H
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Support/CallSite.h"
+#include "llvm/IR/CallSite.h"
+#include "llvm/IR/Metadata.h"
 
 namespace llvm {
 
@@ -67,7 +68,7 @@ protected:
   /// typically called by the run* methods of these subclasses.  This may be
   /// called multiple times.
   ///
-  void InitializeAliasAnalysis(Pass *P);
+  void InitializeAliasAnalysis(Pass *P, const DataLayout *DL);
 
   /// getAnalysisUsage - All alias analysis implementations should invoke this
   /// directly (using AliasAnalysis::getAnalysisUsage(AU)).
@@ -75,18 +76,13 @@ protected:
 
 public:
   static char ID; // Class identification, replacement for typeinfo
-  AliasAnalysis() : DL(0), TLI(0), AA(0) {}
+  AliasAnalysis() : DL(nullptr), TLI(nullptr), AA(nullptr) {}
   virtual ~AliasAnalysis();  // We want to be subclassed
 
   /// UnknownSize - This is a special value which can be used with the
   /// size arguments in alias queries to indicate that the caller does not
   /// know the sizes of the potential memory references.
   static uint64_t const UnknownSize = ~UINT64_C(0);
-
-  /// getDataLayout - Return a pointer to the current DataLayout object, or
-  /// null if no DataLayout object is available.
-  ///
-  const DataLayout *getDataLayout() const { return DL; }
 
   /// getTargetLibraryInfo - Return a pointer to the current TargetLibraryInfo
   /// object, or null if no TargetLibraryInfo object is available.
@@ -112,13 +108,14 @@ public:
     /// there are restrictions on stepping out of one object and into another.
     /// See http://llvm.org/docs/LangRef.html#pointeraliasing
     uint64_t Size;
-    /// TBAATag - The metadata node which describes the TBAA type of
-    /// the location, or null if there is no known unique tag.
-    const MDNode *TBAATag;
+    /// AATags - The metadata nodes which describes the aliasing of the
+    /// location (each member is null if that kind of information is
+    /// unavailable)..
+    AAMDNodes AATags;
 
-    explicit Location(const Value *P = 0, uint64_t S = UnknownSize,
-                      const MDNode *N = 0)
-      : Ptr(P), Size(S), TBAATag(N) {}
+    explicit Location(const Value *P = nullptr, uint64_t S = UnknownSize,
+                      const AAMDNodes &N = AAMDNodes())
+      : Ptr(P), Size(S), AATags(N) {}
 
     Location getWithNewPtr(const Value *NewPtr) const {
       Location Copy(*this);
@@ -132,10 +129,14 @@ public:
       return Copy;
     }
 
-    Location getWithoutTBAATag() const {
+    Location getWithoutAATags() const {
       Location Copy(*this);
-      Copy.TBAATag = 0;
+      Copy.AATags = AAMDNodes();
       return Copy;
+    }
+
+    bool operator==(const AliasAnalysis::Location &Other) const {
+      return Ptr == Other.Ptr && Size == Other.Size && AATags == Other.AATags;
     }
   };
 
@@ -148,6 +149,19 @@ public:
   Location getLocation(const AtomicRMWInst *RMWI);
   static Location getLocationForSource(const MemTransferInst *MTI);
   static Location getLocationForDest(const MemIntrinsic *MI);
+  Location getLocation(const Instruction *Inst) {
+    if (auto *I = dyn_cast<LoadInst>(Inst))
+      return getLocation(I);
+    else if (auto *I = dyn_cast<StoreInst>(Inst))
+      return getLocation(I);
+    else if (auto *I = dyn_cast<VAArgInst>(Inst))
+      return getLocation(I);
+    else if (auto *I = dyn_cast<AtomicCmpXchgInst>(Inst))
+      return getLocation(I);
+    else if (auto *I = dyn_cast<AtomicRMWInst>(Inst))
+      return getLocation(I);
+    llvm_unreachable("unsupported memory instruction");
+  }
 
   /// Alias analysis result - Either we know for sure that it does not alias, we
   /// know for sure it must alias, or we don't know anything: The two pointers
@@ -274,6 +288,14 @@ public:
     UnknownModRefBehavior = Anywhere | ModRef
   };
 
+  /// Get the location associated with a pointer argument of a callsite.
+  /// The mask bits are set to indicate the allowed aliasing ModRef kinds.
+  /// Note that these mask bits do not necessarily account for the overall
+  /// behavior of the function, but rather only provide additional
+  /// per-argument information.
+  virtual Location getArgLocation(ImmutableCallSite CS, unsigned ArgIdx,
+                                  ModRefResult &Mask);
+
   /// getModRefBehavior - Return the behavior when calling the given call site.
   virtual ModRefBehavior getModRefBehavior(ImmutableCallSite CS);
 
@@ -345,6 +367,24 @@ public:
   ///
   static bool doesAccessArgPointees(ModRefBehavior MRB) {
     return (MRB & ModRef) && (MRB & ArgumentPointees);
+  }
+
+  /// getModRefInfo - Return information about whether or not an
+  /// instruction may read or write memory (without regard to a
+  /// specific location)
+  ModRefResult getModRefInfo(const Instruction *I) {
+    if (auto CS = ImmutableCallSite(I)) {
+      auto MRB = getModRefBehavior(CS);
+      if (MRB & ModRef)
+        return ModRef;
+      else if (MRB & Ref)
+        return Ref;
+      else if (MRB & Mod)
+        return Mod;
+      return NoModRef;
+    }
+
+    return getModRefInfo(I, Location());
   }
 
   /// getModRefInfo - Return information about whether or not an instruction may
@@ -467,6 +507,10 @@ public:
   ModRefResult getModRefInfo(const VAArgInst* I, const Value* P, uint64_t Size){
     return getModRefInfo(I, Location(P, Size));
   }
+  /// getModRefInfo - Return information about whether a call and an instruction
+  /// may refer to the same memory locations.
+  ModRefResult getModRefInfo(Instruction *I,
+                             ImmutableCallSite Call);
 
   /// getModRefInfo - Return information about whether two call sites may refer
   /// to the same set of memory locations.  See 
@@ -492,7 +536,7 @@ public:
   ///
 
   /// canBasicBlockModify - Return true if it is possible for execution of the
-  /// specified basic block to modify the value pointed to by Ptr.
+  /// specified basic block to modify the location Loc.
   bool canBasicBlockModify(const BasicBlock &BB, const Location &Loc);
 
   /// canBasicBlockModify - A convenience wrapper.
@@ -500,17 +544,20 @@ public:
     return canBasicBlockModify(BB, Location(P, Size));
   }
 
-  /// canInstructionRangeModify - Return true if it is possible for the
-  /// execution of the specified instructions to modify the value pointed to by
-  /// Ptr.  The instructions to consider are all of the instructions in the
-  /// range of [I1,I2] INCLUSIVE.  I1 and I2 must be in the same basic block.
-  bool canInstructionRangeModify(const Instruction &I1, const Instruction &I2,
-                                 const Location &Loc);
+  /// canInstructionRangeModRef - Return true if it is possible for the
+  /// execution of the specified instructions to mod\ref (according to the
+  /// mode) the location Loc. The instructions to consider are all
+  /// of the instructions in the range of [I1,I2] INCLUSIVE.
+  /// I1 and I2 must be in the same basic block.
+  bool canInstructionRangeModRef(const Instruction &I1,
+                                const Instruction &I2, const Location &Loc,
+                                const ModRefResult Mode);
 
-  /// canInstructionRangeModify - A convenience wrapper.
-  bool canInstructionRangeModify(const Instruction &I1, const Instruction &I2,
-                                 const Value *Ptr, uint64_t Size) {
-    return canInstructionRangeModify(I1, I2, Location(Ptr, Size));
+  /// canInstructionRangeModRef - A convenience wrapper.
+  bool canInstructionRangeModRef(const Instruction &I1,
+                                 const Instruction &I2, const Value *Ptr,
+                                 uint64_t Size, const ModRefResult Mode) {
+    return canInstructionRangeModRef(I1, I2, Location(Ptr, Size), Mode);
   }
 
   //===--------------------------------------------------------------------===//
@@ -558,25 +605,21 @@ public:
 template<>
 struct DenseMapInfo<AliasAnalysis::Location> {
   static inline AliasAnalysis::Location getEmptyKey() {
-    return
-      AliasAnalysis::Location(DenseMapInfo<const Value *>::getEmptyKey(),
-                              0, 0);
+    return AliasAnalysis::Location(DenseMapInfo<const Value *>::getEmptyKey(),
+                                   0);
   }
   static inline AliasAnalysis::Location getTombstoneKey() {
-    return
-      AliasAnalysis::Location(DenseMapInfo<const Value *>::getTombstoneKey(),
-                              0, 0);
+    return AliasAnalysis::Location(
+        DenseMapInfo<const Value *>::getTombstoneKey(), 0);
   }
   static unsigned getHashValue(const AliasAnalysis::Location &Val) {
     return DenseMapInfo<const Value *>::getHashValue(Val.Ptr) ^
            DenseMapInfo<uint64_t>::getHashValue(Val.Size) ^
-           DenseMapInfo<const MDNode *>::getHashValue(Val.TBAATag);
+           DenseMapInfo<AAMDNodes>::getHashValue(Val.AATags);
   }
   static bool isEqual(const AliasAnalysis::Location &LHS,
                       const AliasAnalysis::Location &RHS) {
-    return LHS.Ptr == RHS.Ptr &&
-           LHS.Size == RHS.Size &&
-           LHS.TBAATag == RHS.TBAATag;
+    return LHS == RHS;
   }
 };
 
@@ -596,6 +639,13 @@ bool isNoAliasArgument(const Value *V);
 ///    NoAlias returns (e.g. calls to malloc)
 ///
 bool isIdentifiedObject(const Value *V);
+
+/// isIdentifiedFunctionLocal - Return true if V is umabigously identified
+/// at the function-level. Different IdentifiedFunctionLocals can't alias.
+/// Further, an IdentifiedFunctionLocal can not alias with any function
+/// arguments other than itself, which is not necessarily true for
+/// IdentifiedObjects.
+bool isIdentifiedFunctionLocal(const Value *V);
 
 } // End llvm namespace
 

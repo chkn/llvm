@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_OBJECT_IR_OBJECT_FILE_H
-#define LLVM_OBJECT_IR_OBJECT_FILE_H
+#ifndef LLVM_OBJECT_IROBJECTFILE_H
+#define LLVM_OBJECT_IROBJECTFILE_H
 
 #include "llvm/Object/SymbolicFile.h"
 
@@ -22,23 +22,51 @@ class Module;
 class GlobalValue;
 
 namespace object {
+class ObjectFile;
+
 class IRObjectFile : public SymbolicFile {
-  OwningPtr<Module> M;
-  OwningPtr<Mangler> Mang;
+  std::unique_ptr<Module> M;
+  std::unique_ptr<Mangler> Mang;
+  std::vector<std::pair<std::string, uint32_t>> AsmSymbols;
+
 public:
-  IRObjectFile(MemoryBuffer *Object, error_code &EC, LLVMContext &Context,
-               bool BufferOwned);
-  void moveSymbolNext(DataRefImpl &Symb) const LLVM_OVERRIDE;
-  error_code printSymbolName(raw_ostream &OS, DataRefImpl Symb) const
-      LLVM_OVERRIDE;
-  uint32_t getSymbolFlags(DataRefImpl Symb) const LLVM_OVERRIDE;
-  const GlobalValue &getSymbolGV(DataRefImpl Symb) const;
-  basic_symbol_iterator symbol_begin_impl() const LLVM_OVERRIDE;
-  basic_symbol_iterator symbol_end_impl() const LLVM_OVERRIDE;
+  IRObjectFile(MemoryBufferRef Object, std::unique_ptr<Module> M);
+  ~IRObjectFile() override;
+  void moveSymbolNext(DataRefImpl &Symb) const override;
+  std::error_code printSymbolName(raw_ostream &OS,
+                                  DataRefImpl Symb) const override;
+  uint32_t getSymbolFlags(DataRefImpl Symb) const override;
+  GlobalValue *getSymbolGV(DataRefImpl Symb);
+  const GlobalValue *getSymbolGV(DataRefImpl Symb) const {
+    return const_cast<IRObjectFile *>(this)->getSymbolGV(Symb);
+  }
+  basic_symbol_iterator symbol_begin_impl() const override;
+  basic_symbol_iterator symbol_end_impl() const override;
+
+  const Module &getModule() const {
+    return const_cast<IRObjectFile*>(this)->getModule();
+  }
+  Module &getModule() {
+    return *M;
+  }
+  std::unique_ptr<Module> takeModule();
 
   static inline bool classof(const Binary *v) {
     return v->isIR();
   }
+
+  /// \brief Finds and returns bitcode embedded in the given object file, or an
+  /// error code if not found.
+  static ErrorOr<MemoryBufferRef> findBitcodeInObject(const ObjectFile &Obj);
+
+  /// \brief Finds and returns bitcode in the given memory buffer (which may
+  /// be either a bitcode file or a native object file with embedded bitcode),
+  /// or an error code if not found.
+  static ErrorOr<MemoryBufferRef>
+  findBitcodeInMemBuffer(MemoryBufferRef Object);
+
+  static ErrorOr<std::unique_ptr<IRObjectFile>> create(MemoryBufferRef Object,
+                                                       LLVMContext &Context);
 };
 }
 }

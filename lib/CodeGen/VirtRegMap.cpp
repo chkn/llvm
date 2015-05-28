@@ -16,12 +16,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "regalloc"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "LiveDebugVariables.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SparseSet.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -37,8 +36,11 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 #include <algorithm>
 using namespace llvm;
+
+#define DEBUG_TYPE "regalloc"
 
 STATISTIC(NumSpillSlots, "Number of spill slots allocated");
 STATISTIC(NumIdCopies,   "Number of identity moves eliminated after rewriting");
@@ -53,8 +55,8 @@ INITIALIZE_PASS(VirtRegMap, "virtregmap", "Virtual Register Map", false, false)
 
 bool VirtRegMap::runOnMachineFunction(MachineFunction &mf) {
   MRI = &mf.getRegInfo();
-  TII = mf.getTarget().getInstrInfo();
-  TRI = mf.getTarget().getRegisterInfo();
+  TII = mf.getSubtarget().getInstrInfo();
+  TRI = mf.getSubtarget().getRegisterInfo();
   MF = &mf;
 
   Virt2PhysMap.clear();
@@ -122,7 +124,7 @@ void VirtRegMap::print(raw_ostream &OS, const Module*) const {
     if (Virt2PhysMap[Reg] != (unsigned)VirtRegMap::NO_PHYS_REG) {
       OS << '[' << PrintReg(Reg, TRI) << " -> "
          << PrintReg(Virt2PhysMap[Reg], TRI) << "] "
-         << MRI->getRegClass(Reg)->getName() << "\n";
+         << TRI->getRegClassName(MRI->getRegClass(Reg)) << "\n";
     }
   }
 
@@ -130,7 +132,7 @@ void VirtRegMap::print(raw_ostream &OS, const Module*) const {
     unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
     if (Virt2StackSlotMap[Reg] != VirtRegMap::NO_STACK_SLOT) {
       OS << '[' << PrintReg(Reg, TRI) << " -> fi#" << Virt2StackSlotMap[Reg]
-         << "] " << MRI->getRegClass(Reg)->getName() << "\n";
+         << "] " << TRI->getRegClassName(MRI->getRegClass(Reg)) << "\n";
     }
   }
   OS << '\n';
@@ -169,9 +171,9 @@ public:
   static char ID;
   VirtRegRewriter() : MachineFunctionPass(ID) {}
 
-  virtual void getAnalysisUsage(AnalysisUsage &AU) const;
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
 
-  virtual bool runOnMachineFunction(MachineFunction&);
+  bool runOnMachineFunction(MachineFunction&) override;
 };
 } // end anonymous namespace
 
@@ -204,8 +206,8 @@ void VirtRegRewriter::getAnalysisUsage(AnalysisUsage &AU) const {
 bool VirtRegRewriter::runOnMachineFunction(MachineFunction &fn) {
   MF = &fn;
   TM = &MF->getTarget();
-  TRI = TM->getRegisterInfo();
-  TII = TM->getInstrInfo();
+  TRI = MF->getSubtarget().getRegisterInfo();
+  TII = MF->getSubtarget().getInstrInfo();
   MRI = &MF->getRegInfo();
   Indexes = &getAnalysis<SlotIndexes>();
   LIS = &getAnalysis<LiveIntervals>();
@@ -250,20 +252,44 @@ void VirtRegRewriter::addMBBLiveIns() {
     unsigned PhysReg = VRM->getPhys(VirtReg);
     assert(PhysReg != VirtRegMap::NO_PHYS_REG && "Unmapped virtual register.");
 
-    // Scan the segments of LI.
-    for (LiveInterval::const_iterator I = LI.begin(), E = LI.end(); I != E;
-         ++I) {
-      if (!Indexes->findLiveInMBBs(I->start, I->end, LiveIn))
-        continue;
-      for (unsigned i = 0, e = LiveIn.size(); i != e; ++i)
-        if (!LiveIn[i]->isLiveIn(PhysReg))
+    if (LI.hasSubRanges()) {
+      for (LiveInterval::SubRange &S : LI.subranges()) {
+        for (const auto &Seg : S.segments) {
+          if (!Indexes->findLiveInMBBs(Seg.start, Seg.end, LiveIn))
+            continue;
+          for (MCSubRegIndexIterator SR(PhysReg, TRI); SR.isValid(); ++SR) {
+            unsigned SubReg = SR.getSubReg();
+            unsigned SubRegIndex = SR.getSubRegIndex();
+            unsigned SubRegLaneMask = TRI->getSubRegIndexLaneMask(SubRegIndex);
+            if ((SubRegLaneMask & S.LaneMask) == 0)
+              continue;
+            for (unsigned i = 0, e = LiveIn.size(); i != e; ++i) {
+              LiveIn[i]->addLiveIn(SubReg);
+            }
+          }
+          LiveIn.clear();
+        }
+      }
+    } else {
+      // Scan the segments of LI.
+      for (const auto &Seg : LI.segments) {
+        if (!Indexes->findLiveInMBBs(Seg.start, Seg.end, LiveIn))
+          continue;
+        for (unsigned i = 0, e = LiveIn.size(); i != e; ++i)
           LiveIn[i]->addLiveIn(PhysReg);
-      LiveIn.clear();
+        LiveIn.clear();
+      }
     }
   }
+
+  // Sort and unique MBB LiveIns as we've not checked if SubReg/PhysReg were in
+  // each MBB's LiveIns set before calling addLiveIn on them.
+  for (MachineBasicBlock &MBB : *MF)
+    MBB.sortUniqueLiveIns();
 }
 
 void VirtRegRewriter::rewrite() {
+  bool NoSubRegLiveness = !MRI->subRegLivenessEnabled();
   SmallVector<unsigned, 8> SuperDeads;
   SmallVector<unsigned, 8> SuperDefs;
   SmallVector<unsigned, 8> SuperKills;
@@ -345,7 +371,8 @@ void VirtRegRewriter::rewrite() {
           // A virtual register kill refers to the whole register, so we may
           // have to add <imp-use,kill> operands for the super-register.  A
           // partial redef always kills and redefines the super-register.
-          if (MO.readsReg() && (MO.isDef() || MO.isKill()))
+          if (NoSubRegLiveness && MO.readsReg()
+              && (MO.isDef() || MO.isKill()))
             SuperKills.push_back(PhysReg);
 
           if (MO.isDef()) {
@@ -356,10 +383,12 @@ void VirtRegRewriter::rewrite() {
             MO.setIsUndef(false);
 
             // Also add implicit defs for the super-register.
-            if (MO.isDead())
-              SuperDeads.push_back(PhysReg);
-            else
-              SuperDefs.push_back(PhysReg);
+            if (NoSubRegLiveness) {
+              if (MO.isDead())
+                SuperDeads.push_back(PhysReg);
+              else
+                SuperDefs.push_back(PhysReg);
+            }
           }
 
           // PhysReg operands cannot have subregister indexes.
@@ -418,10 +447,8 @@ void VirtRegRewriter::rewrite() {
       // Check if this register has a use that will impact the rest of the
       // code. Uses in debug and noreturn instructions do not impact the
       // generated code.
-      for (MachineRegisterInfo::reg_nodbg_iterator It =
-             MRI->reg_nodbg_begin(Reg),
-             EndIt = MRI->reg_nodbg_end(); It != EndIt; ++It) {
-        if (!NoReturnInsts.count(&(*It))) {
+      for (MachineInstr &It : MRI->reg_nodbg_instructions(Reg)) {
+        if (!NoReturnInsts.count(&It)) {
           MRI->setPhysRegUsed(Reg);
           break;
         }

@@ -18,7 +18,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/InstVisitor.h"
+#include "llvm/IR/InstVisitor.h"
 
 using namespace llvm;
 
@@ -162,7 +162,7 @@ class R600TextureIntrinsicsReplacer :
     Value *SamplerId = I.getArgOperand(2);
 
     unsigned TextureType =
-        dyn_cast<ConstantInt>(I.getArgOperand(3))->getZExtValue();
+        cast<ConstantInt>(I.getArgOperand(3))->getZExtValue();
 
     unsigned SrcSelect[4] = { 0, 1, 2, 3 };
     unsigned CT[4] = {1, 1, 1, 1};
@@ -186,7 +186,7 @@ class R600TextureIntrinsicsReplacer :
     Value *SamplerId = I.getArgOperand(5);
 
     unsigned TextureType =
-        dyn_cast<ConstantInt>(I.getArgOperand(6))->getZExtValue();
+        cast<ConstantInt>(I.getArgOperand(6))->getZExtValue();
 
     unsigned SrcSelect[4] = { 0, 1, 2, 3 };
     unsigned CT[4] = {1, 1, 1, 1};
@@ -209,7 +209,7 @@ public:
     FunctionPass(ID) {
   }
 
-  virtual bool doInitialization(Module &M) {
+  bool doInitialization(Module &M) override {
     LLVMContext &Ctx = M.getContext();
     Mod = &M;
     FloatType = Type::getFloatTy(Ctx);
@@ -245,16 +245,16 @@ public:
     return false;
   }
 
-  virtual bool runOnFunction(Function &F) {
+  bool runOnFunction(Function &F) override {
     visit(F);
     return false;
   }
 
-  virtual const char *getPassName() const {
+  const char *getPassName() const override {
     return "R600 Texture Intrinsics Replacer";
   }
 
-  void getAnalysisUsage(AnalysisUsage &AU) const {
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
   }
 
   void visitCallInst(CallInst &I) {

@@ -1,22 +1,47 @@
 # See docs/CMake.html for instructions about how to build LLVM with CMake.
 
-cmake_minimum_required(VERSION 2.8.8)
+cmake_minimum_required(VERSION 2.8.12.2)
 
-# FIXME: It may be removed when we use 2.8.12.
-if(CMAKE_VERSION VERSION_LESS 2.8.12)
-  # Invalidate a couple of keywords.
-  set(cmake_2_8_12_INTERFACE)
-  set(cmake_2_8_12_PRIVATE)
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "No build type selected, default to Debug")
+  set(CMAKE_BUILD_TYPE "Debug")
+endif()
+
+if(POLICY CMP0022)
+  cmake_policy(SET CMP0022 NEW) # automatic when 2.8.12 is required
+endif()
+
+if (POLICY CMP0051)
+  # CMake 3.1 and higher include generator expressions of the form
+  # $<TARGETLIB:obj> in the SOURCES property.  These need to be
+  # stripped everywhere that access the SOURCES property, so we just
+  # defer to the OLD behavior of not including generator expressions
+  # in the output for now.
+  cmake_policy(SET CMP0051 OLD)
+endif()
+
+if(CMAKE_VERSION VERSION_LESS 3.1.20141117)
+  set(cmake_3_2_USES_TERMINAL)
 else()
-  # Use ${cmake_2_8_12_KEYWORD} intead of KEYWORD in target_link_libraries().
-  set(cmake_2_8_12_INTERFACE INTERFACE)
-  set(cmake_2_8_12_PRIVATE PRIVATE)
-  if(POLICY CMP0022)
-    cmake_policy(SET CMP0022 NEW) # automatic when 2.8.12 is required
-  endif()
+  set(cmake_3_2_USES_TERMINAL USES_TERMINAL)
 endif()
 
 project(LLVM)
+
+# The following only works with the Ninja generator in CMake >= 3.0.
+set(LLVM_PARALLEL_COMPILE_JOBS "" CACHE STRING
+  "Define the maximum number of concurrent compilation jobs.")
+if(LLVM_PARALLEL_COMPILE_JOBS)
+  set_property(GLOBAL APPEND PROPERTY JOB_POOLS compile_job_pool=${LLVM_PARALLEL_COMPILE_JOBS})
+  set(CMAKE_JOB_POOL_COMPILE compile_job_pool)
+endif()
+
+set(LLVM_PARALLEL_LINK_JOBS "" CACHE STRING
+  "Define the maximum number of concurrent link jobs.")
+if(LLVM_PARALLEL_LINK_JOBS)
+  set_property(GLOBAL APPEND PROPERTY JOB_POOLS link_job_pool=${LLVM_PARALLEL_LINK_JOBS})
+  set(CMAKE_JOB_POOL_LINK link_job_pool)
+endif()
 
 # Add path for custom modules
 set(CMAKE_MODULE_PATH
@@ -26,11 +51,16 @@ set(CMAKE_MODULE_PATH
   )
 
 set(LLVM_VERSION_MAJOR 3)
-set(LLVM_VERSION_MINOR 5)
+set(LLVM_VERSION_MINOR 7)
+set(LLVM_VERSION_PATCH 0)
+set(LLVM_VERSION_SUFFIX svn)
 
 if (NOT PACKAGE_VERSION)
-  set(PACKAGE_VERSION "${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}svn")
+  set(PACKAGE_VERSION
+    "${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}${LLVM_VERSION_SUFFIX}")
 endif()
+
+option(LLVM_INSTALL_UTILS "Include utility binaries in the 'install' target." OFF)
 
 option(LLVM_INSTALL_TOOLCHAIN_ONLY "Only include toolchain files in the 'install' target." OFF)
 
@@ -60,17 +90,24 @@ set(CPACK_PACKAGE_INSTALL_DIRECTORY "LLVM")
 set(CPACK_PACKAGE_VENDOR "LLVM")
 set(CPACK_PACKAGE_VERSION_MAJOR ${LLVM_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR ${LLVM_VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH ${LLVM_VERSION_PATCH})
 set(CPACK_PACKAGE_VERSION ${PACKAGE_VERSION})
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.TXT")
+set(CPACK_NSIS_COMPRESSOR "/SOLID lzma \r\n SetCompressorDictSize 32")
 if(WIN32 AND NOT UNIX)
   set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "LLVM")
   set(CPACK_PACKAGE_ICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_logo.bmp")
+  set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_icon.ico")
+  set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_icon.ico")
   set(CPACK_NSIS_MODIFY_PATH "ON")
   set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL "ON")
   set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
     "ExecWait '$INSTDIR/tools/msbuild/install.bat'")
   set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
     "ExecWait '$INSTDIR/tools/msbuild/uninstall.bat'")
+  if( CMAKE_CL_64 )
+    set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
+  endif()
 endif()
 include(CPack)
 
@@ -107,9 +144,17 @@ endif()
 
 string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
 
+set(LLVM_LIBDIR_SUFFIX "" CACHE STRING "Define suffix of library directory name (32/64)" )
+
 # They are used as destination of target generators.
 set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bin)
-set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib)
+set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib${LLVM_LIBDIR_SUFFIX})
+if(WIN32 OR CYGWIN)
+  # DLL platform -- put DLLs into bin.
+  set(LLVM_SHLIB_OUTPUT_INTDIR ${LLVM_RUNTIME_OUTPUT_INTDIR})
+else()
+  set(LLVM_SHLIB_OUTPUT_INTDIR ${LLVM_LIBRARY_OUTPUT_INTDIR})
+endif()
 
 # Each of them corresponds to llvm-config's.
 set(LLVM_TOOLS_BINARY_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR}) # --bindir
@@ -120,7 +165,6 @@ set(LLVM_BINARY_DIR       ${CMAKE_CURRENT_BINARY_DIR}  ) # --prefix
 
 set(LLVM_EXAMPLES_BINARY_DIR ${LLVM_BINARY_DIR}/examples)
 set(LLVM_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
-set(LLVM_LIBDIR_SUFFIX "" CACHE STRING "Define suffix of library directory name (32/64)" )
 
 set(LLVM_ALL_TARGETS
   AArch64
@@ -191,16 +235,11 @@ list(REMOVE_DUPLICATES LLVM_TARGETS_TO_BUILD)
 include(AddLLVMDefinitions)
 
 option(LLVM_ENABLE_PIC "Build Position-Independent Code" ON)
-
-# MSVC has a gazillion warnings with this.
-if( MSVC )
-  option(LLVM_ENABLE_WARNINGS "Enable compiler warnings." OFF)
-else( MSVC )
-  option(LLVM_ENABLE_WARNINGS "Enable compiler warnings." ON)
-endif()
-
-option(LLVM_ENABLE_CXX11 "Compile with C++11 enabled." ON)
+option(LLVM_ENABLE_WARNINGS "Enable compiler warnings." ON)
+option(LLVM_ENABLE_MODULES "Compile with C++ modules enabled." OFF)
+option(LLVM_ENABLE_CXX1Y "Compile with C++1y enabled." OFF)
 option(LLVM_ENABLE_LIBCXX "Use libc++ if available." OFF)
+option(LLVM_ENABLE_LIBCXXABI "Use libc++abi when using libc++." OFF)
 option(LLVM_ENABLE_PEDANTIC "Compile with pedantic enabled." ON)
 option(LLVM_ENABLE_WERROR "Fail and stop if a warning is triggered." OFF)
 
@@ -209,6 +248,9 @@ if( NOT uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG" )
 else()
   option(LLVM_ENABLE_ASSERTIONS "Enable assertions" ON)
 endif()
+
+set(LLVM_ABI_BREAKING_CHECKS "WITH_ASSERTS" CACHE STRING
+  "Enable abi-breaking checks.  Can be WITH_ASSERTS, FORCE_ON or FORCE_OFF.")
 
 option(LLVM_FORCE_USE_OLD_HOST_TOOLCHAIN
        "Set to ON to force using an old, unsupported host toolchain." OFF)
@@ -231,7 +273,7 @@ option(LLVM_USE_OPROFILE
 # If enabled, verify we are on a platform that supports oprofile.
 if( LLVM_USE_OPROFILE )
   if( NOT CMAKE_SYSTEM_NAME MATCHES "Linux" )
-    message(FATAL_ERROR "OProfile support is available on Linux only.") 
+    message(FATAL_ERROR "OProfile support is available on Linux only.")
   endif( NOT CMAKE_SYSTEM_NAME MATCHES "Linux" )
 endif( LLVM_USE_OPROFILE )
 
@@ -240,6 +282,9 @@ set(LLVM_USE_SANITIZER "" CACHE STRING
 
 option(LLVM_USE_SPLIT_DWARF
   "Use -gsplit-dwarf when compiling llvm." OFF)
+
+option(WITH_POLLY "Build LLVM with Polly" ON)
+option(LINK_POLLY_INTO_TOOLS "Static link Polly into tools" OFF)
 
 # Define an option controlling whether we should build for 32-bit on 64-bit
 # platforms, where supported.
@@ -269,6 +314,8 @@ option(LLVM_INCLUDE_TOOLS "Generate build targets for the LLVM tools." ON)
 option(LLVM_BUILD_TOOLS
   "Build the LLVM tools. If OFF, just generate build targets." ON)
 
+option(LLVM_INCLUDE_UTILS "Generate build targets for the LLVM utils." ON)
+
 option(LLVM_BUILD_RUNTIME
   "Build the LLVM runtime libraries." ON)
 option(LLVM_BUILD_EXAMPLES
@@ -281,10 +328,23 @@ option(LLVM_INCLUDE_TESTS "Generate build targets for the LLVM unit tests." ON)
 
 option (LLVM_BUILD_DOCS "Build the llvm documentation." OFF)
 option (LLVM_INCLUDE_DOCS "Generate build targets for llvm documentation." ON)
-option (LLVM_ENABLE_DOXYGEN "Use doxygen to generate llvm documentation." OFF)
+option (LLVM_ENABLE_DOXYGEN "Use doxygen to generate llvm API documentation." OFF)
+option (LLVM_ENABLE_SPHINX "Use Sphinx to generate llvm documentation." OFF)
 
 option (LLVM_BUILD_EXTERNAL_COMPILER_RT
   "Build compiler-rt as an external project." OFF)
+
+option(LLVM_BUILD_LLVM_DYLIB "Build libllvm dynamic library" OFF)
+option(LLVM_DYLIB_EXPORT_ALL "Export all symbols from libLLVM.dylib (default is C API only" OFF)
+option(LLVM_DISABLE_LLVM_DYLIB_ATEXIT "Disable llvm-shlib's atexit destructors." ON)
+if(LLVM_DISABLE_LLVM_DYLIB_ATEXIT)
+  set(DISABLE_LLVM_DYLIB_ATEXIT 1)
+endif()
+
+option(LLVM_OPTIMIZED_TABLEGEN "Force TableGen to be built with optimization" OFF)
+if(CMAKE_CROSSCOMPILING OR (LLVM_OPTIMIZED_TABLEGEN AND LLVM_ENABLE_ASSERTIONS))
+  set(LLVM_USE_HOST_TOOLS ON)
+endif()
 
 # All options referred to from HandleLLVMOptions have to be specified
 # BEFORE this include, otherwise options will not be correctly set on
@@ -300,13 +360,19 @@ set(TARGET_TRIPLE "${LLVM_DEFAULT_TARGET_TRIPLE}")
 include(HandleLLVMOptions)
 
 # Verify that we can find a Python 2 interpreter.  Python 3 is unsupported.
-set(Python_ADDITIONAL_VERSIONS 2.7 2.6 2.5)
+# FIXME: We should support systems with only Python 3, but that requires work
+# on LLDB.
+set(Python_ADDITIONAL_VERSIONS 2.7)
 include(FindPythonInterp)
 if( NOT PYTHONINTERP_FOUND )
   message(FATAL_ERROR
 "Unable to find Python interpreter, required for builds and testing.
 
 Please install Python or specify the PYTHON_EXECUTABLE CMake variable.")
+endif()
+
+if( ${PYTHON_VERSION_STRING} VERSION_LESS 2.7 )
+  message(FATAL_ERROR "Python 2.7 or newer is required")
 endif()
 
 ######
@@ -434,8 +500,8 @@ configure_file(
 
 # They are not referenced. See set_output_directory().
 set( CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/bin )
-set( CMAKE_LIBRARY_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/lib )
-set( CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/lib )
+set( CMAKE_LIBRARY_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/lib${LLVM_LIBDIR_SUFFIX} )
+set( CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/lib${LLVM_LIBDIR_SUFFIX} )
 
 set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
 if (APPLE)
@@ -443,13 +509,32 @@ if (APPLE)
   set(CMAKE_INSTALL_RPATH "@executable_path/../lib")
 else(UNIX)
   if(NOT DEFINED CMAKE_INSTALL_RPATH)
-    set(CMAKE_INSTALL_RPATH "\$ORIGIN/../lib")
+    set(CMAKE_INSTALL_RPATH "\$ORIGIN/../lib${LLVM_LIBDIR_SUFFIX}")
+    if (${CMAKE_SYSTEM_NAME} MATCHES FreeBSD)
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,origin")
+      set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,origin")
+    endif()
   endif(NOT DEFINED CMAKE_INSTALL_RPATH)
+endif()
+
+# Work around a broken bfd ld behavior. When linking a binary with a
+# foo.so library, it will try to find any library that foo.so uses and
+# check its symbols. This is wasteful (the check was done when foo.so
+# was created) and can fail since it is not the dynamic linker and
+# doesn't know how to handle search paths correctly.
+if (UNIX AND NOT APPLE)
+  set(CMAKE_EXE_LINKER_FLAGS
+      "${CMAKE_EXE_LINKER_FLAGS} -Wl,-allow-shlib-undefined")
 endif()
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 include_directories( ${LLVM_INCLUDE_DIR} ${LLVM_MAIN_INCLUDE_DIR})
+
+# when crosscompiling import the executable targets from a file
+if(LLVM_USE_HOST_TOOLS)
+  include(CrossCompile)
+endif(LLVM_USE_HOST_TOOLS)
 
 if( ${CMAKE_SYSTEM_NAME} MATCHES FreeBSD )
   # On FreeBSD, /usr/local/* is not used by default. In order to build LLVM
@@ -463,7 +548,7 @@ if( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
 endif( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
 
 # Make sure we don't get -rdynamic in every binary. For those that need it,
-# use set_target_properties(target PROPERTIES ENABLE_EXPORTS 1)
+# use export_executable_symbols(target).
 set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS "")
 
 include(AddLLVM)
@@ -485,18 +570,37 @@ add_subdirectory(include/llvm)
 
 add_subdirectory(lib)
 
-add_subdirectory(utils/FileCheck)
-add_subdirectory(utils/FileUpdate)
-add_subdirectory(utils/count)
-add_subdirectory(utils/not)
-add_subdirectory(utils/llvm-lit)
-add_subdirectory(utils/yaml-bench)
+if( LLVM_INCLUDE_UTILS )
+  add_subdirectory(utils/FileCheck)
+  add_subdirectory(utils/PerfectShuffle)
+  add_subdirectory(utils/count)
+  add_subdirectory(utils/not)
+  add_subdirectory(utils/llvm-lit)
+  add_subdirectory(utils/yaml-bench)
+else()
+  if ( LLVM_INCLUDE_TESTS )
+    message(FATAL_ERROR "Including tests when not building utils will not work.
+    Either set LLVM_INCLUDE_UTILS to On, or set LLVM_INCLDE_TESTS to Off.")
+  endif()
+endif()
 
 if(LLVM_INCLUDE_TESTS)
   add_subdirectory(utils/unittest)
 endif()
 
+foreach( binding ${LLVM_BINDINGS_LIST} )
+  if( EXISTS "${LLVM_MAIN_SRC_DIR}/bindings/${binding}/CMakeLists.txt" )
+    add_subdirectory(bindings/${binding})
+  endif()
+endforeach()
+
 add_subdirectory(projects)
+
+if(WITH_POLLY)
+  if(NOT EXISTS ${LLVM_MAIN_SRC_DIR}/tools/polly/CMakeLists.txt)
+    set(WITH_POLLY OFF)
+  endif()
+endif(WITH_POLLY)
 
 if( LLVM_INCLUDE_TOOLS )
   add_subdirectory(tools)
@@ -539,6 +643,7 @@ add_subdirectory(cmake/modules)
 if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
   install(DIRECTORY include/llvm include/llvm-c
     DESTINATION include
+    COMPONENT llvm-headers
     FILES_MATCHING
     PATTERN "*.def"
     PATTERN "*.h"
@@ -550,6 +655,7 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
 
   install(DIRECTORY ${LLVM_INCLUDE_DIR}/llvm
     DESTINATION include
+    COMPONENT llvm-headers
     FILES_MATCHING
     PATTERN "*.def"
     PATTERN "*.h"
@@ -557,16 +663,15 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
     PATTERN "*.inc"
     # Exclude include/llvm/CMakeFiles/intrinsics_gen.dir, matched by "*.def"
     PATTERN "CMakeFiles" EXCLUDE
+    PATTERN "config.h" EXCLUDE
     PATTERN ".svn" EXCLUDE
     )
-endif()
 
-# Workaround for MSVS10 to avoid the Dialog Hell
-# FIXME: This could be removed with future version of CMake.
-if(MSVC_VERSION EQUAL 1600)
-  set(LLVM_SLN_FILENAME "${CMAKE_CURRENT_BINARY_DIR}/LLVM.sln")
-  if( EXISTS "${LLVM_SLN_FILENAME}" )
-    file(APPEND "${LLVM_SLN_FILENAME}" "\n# This should be regenerated!\n")
+  if (NOT CMAKE_CONFIGURATION_TYPES)
+    add_custom_target(installhdrs
+                      DEPENDS ${name}
+                      COMMAND "${CMAKE_COMMAND}"
+                              -DCMAKE_INSTALL_COMPONENT=llvm-headers
+                              -P "${CMAKE_BINARY_DIR}/cmake_install.cmake")
   endif()
 endif()
-

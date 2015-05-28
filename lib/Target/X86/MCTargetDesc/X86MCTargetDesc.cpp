@@ -27,6 +27,12 @@
 #include "llvm/Support/Host.h"
 #include "llvm/Support/TargetRegistry.h"
 
+#if _MSC_VER
+#include <intrin.h>
+#endif
+
+using namespace llvm;
+
 #define GET_REGINFO_MC_DESC
 #include "X86GenRegisterInfo.inc"
 
@@ -35,13 +41,6 @@
 
 #define GET_SUBTARGETINFO_MC_DESC
 #include "X86GenSubtargetInfo.inc"
-
-#if _MSC_VER
-#include <intrin.h>
-#endif
-
-using namespace llvm;
-
 
 std::string X86_MC::ParseX86Triple(StringRef TT) {
   Triple TheTriple(TT);
@@ -56,157 +55,13 @@ std::string X86_MC::ParseX86Triple(StringRef TT) {
   return FS;
 }
 
-/// GetCpuIDAndInfo - Execute the specified cpuid and return the 4 values in the
-/// specified arguments.  If we can't run cpuid on the host, return true.
-bool X86_MC::GetCpuIDAndInfo(unsigned value, unsigned *rEAX,
-                             unsigned *rEBX, unsigned *rECX, unsigned *rEDX) {
-#if defined(__x86_64__) || defined(_M_AMD64) || defined (_M_X64)
-  #if defined(__GNUC__)
-    // gcc doesn't know cpuid would clobber ebx/rbx. Preseve it manually.
-    asm ("movq\t%%rbx, %%rsi\n\t"
-         "cpuid\n\t"
-         "xchgq\t%%rbx, %%rsi\n\t"
-         : "=a" (*rEAX),
-           "=S" (*rEBX),
-           "=c" (*rECX),
-           "=d" (*rEDX)
-         :  "a" (value));
-    return false;
-  #elif defined(_MSC_VER)
-    int registers[4];
-    __cpuid(registers, value);
-    *rEAX = registers[0];
-    *rEBX = registers[1];
-    *rECX = registers[2];
-    *rEDX = registers[3];
-    return false;
-  #else
-    return true;
-  #endif
-#elif defined(i386) || defined(__i386__) || defined(__x86__) || defined(_M_IX86)
-  #if defined(__GNUC__)
-    asm ("movl\t%%ebx, %%esi\n\t"
-         "cpuid\n\t"
-         "xchgl\t%%ebx, %%esi\n\t"
-         : "=a" (*rEAX),
-           "=S" (*rEBX),
-           "=c" (*rECX),
-           "=d" (*rEDX)
-         :  "a" (value));
-    return false;
-  #elif defined(_MSC_VER)
-    __asm {
-      mov   eax,value
-      cpuid
-      mov   esi,rEAX
-      mov   dword ptr [esi],eax
-      mov   esi,rEBX
-      mov   dword ptr [esi],ebx
-      mov   esi,rECX
-      mov   dword ptr [esi],ecx
-      mov   esi,rEDX
-      mov   dword ptr [esi],edx
-    }
-    return false;
-  #else
-    return true;
-  #endif
-#else
-  return true;
-#endif
-}
-
-/// GetCpuIDAndInfoEx - Execute the specified cpuid with subleaf and return the
-/// 4 values in the specified arguments.  If we can't run cpuid on the host,
-/// return true.
-bool X86_MC::GetCpuIDAndInfoEx(unsigned value, unsigned subleaf, unsigned *rEAX,
-                               unsigned *rEBX, unsigned *rECX, unsigned *rEDX) {
-#if defined(__x86_64__) || defined(_M_AMD64) || defined (_M_X64)
-  #if defined(__GNUC__)
-    // gcc desn't know cpuid would clobber ebx/rbx. Preseve it manually.
-    asm ("movq\t%%rbx, %%rsi\n\t"
-         "cpuid\n\t"
-         "xchgq\t%%rbx, %%rsi\n\t"
-         : "=a" (*rEAX),
-           "=S" (*rEBX),
-           "=c" (*rECX),
-           "=d" (*rEDX)
-         :  "a" (value),
-            "c" (subleaf));
-    return false;
-  #elif defined(_MSC_VER)
-    // __cpuidex was added in MSVC++ 9.0 SP1
-    #if (_MSC_VER > 1500) || (_MSC_VER == 1500 && _MSC_FULL_VER >= 150030729)
-      int registers[4];
-      __cpuidex(registers, value, subleaf);
-      *rEAX = registers[0];
-      *rEBX = registers[1];
-      *rECX = registers[2];
-      *rEDX = registers[3];
-      return false;
-    #else
-      return true;
-    #endif
-  #else
-    return true;
-  #endif
-#elif defined(i386) || defined(__i386__) || defined(__x86__) || defined(_M_IX86)
-  #if defined(__GNUC__)
-    asm ("movl\t%%ebx, %%esi\n\t"
-         "cpuid\n\t"
-         "xchgl\t%%ebx, %%esi\n\t"
-         : "=a" (*rEAX),
-           "=S" (*rEBX),
-           "=c" (*rECX),
-           "=d" (*rEDX)
-         :  "a" (value),
-            "c" (subleaf));
-    return false;
-  #elif defined(_MSC_VER)
-    __asm {
-      mov   eax,value
-      mov   ecx,subleaf
-      cpuid
-      mov   esi,rEAX
-      mov   dword ptr [esi],eax
-      mov   esi,rEBX
-      mov   dword ptr [esi],ebx
-      mov   esi,rECX
-      mov   dword ptr [esi],ecx
-      mov   esi,rEDX
-      mov   dword ptr [esi],edx
-    }
-    return false;
-  #else
-    return true;
-  #endif
-#else
-  return true;
-#endif
-}
-
-void X86_MC::DetectFamilyModel(unsigned EAX, unsigned &Family,
-                               unsigned &Model) {
-  Family = (EAX >> 8) & 0xf; // Bits 8 - 11
-  Model  = (EAX >> 4) & 0xf; // Bits 4 - 7
-  if (Family == 6 || Family == 0xf) {
-    if (Family == 0xf)
-      // Examine extended family ID if family ID is F.
-      Family += (EAX >> 20) & 0xff;    // Bits 20 - 27
-    // Examine extended model ID if family ID is 6 or F.
-    Model += ((EAX >> 16) & 0xf) << 4; // Bits 16 - 19
-  }
-}
-
-unsigned X86_MC::getDwarfRegFlavour(StringRef TT, bool isEH) {
-  Triple TheTriple(TT);
-  if (TheTriple.getArch() == Triple::x86_64)
+unsigned X86_MC::getDwarfRegFlavour(Triple TT, bool isEH) {
+  if (TT.getArch() == Triple::x86_64)
     return DWARFFlavour::X86_64;
 
-  if (TheTriple.isOSDarwin())
+  if (TT.isOSDarwin())
     return isEH ? DWARFFlavour::X86_32_DarwinEH : DWARFFlavour::X86_32_Generic;
-  if (TheTriple.getOS() == Triple::MinGW32 ||
-      TheTriple.getOS() == Triple::Cygwin)
+  if (TT.isOSCygMing())
     // Unsupported by now, just quick fallback
     return DWARFFlavour::X86_32_Generic;
   return DWARFFlavour::X86_32_Generic;
@@ -225,20 +80,14 @@ MCSubtargetInfo *X86_MC::createX86MCSubtargetInfo(StringRef TT, StringRef CPU,
   std::string ArchFS = X86_MC::ParseX86Triple(TT);
   if (!FS.empty()) {
     if (!ArchFS.empty())
-      ArchFS = ArchFS + "," + FS.str();
+      ArchFS = (Twine(ArchFS) + "," + FS).str();
     else
       ArchFS = FS;
   }
 
   std::string CPUName = CPU;
-  if (CPUName.empty()) {
-#if defined(i386) || defined(__i386__) || defined(__x86__) || defined(_M_IX86)\
-    || defined(__x86_64__) || defined(_M_AMD64) || defined (_M_X64)
-    CPUName = sys::getHostCPUName();
-#else
+  if (CPUName.empty())
     CPUName = "generic";
-#endif
-  }
 
   MCSubtargetInfo *X = new MCSubtargetInfo();
   InitX86MCSubtargetInfo(X, TT, CPUName, ArchFS);
@@ -259,8 +108,8 @@ static MCRegisterInfo *createX86MCRegisterInfo(StringRef TT) {
 
   MCRegisterInfo *X = new MCRegisterInfo();
   InitX86MCRegisterInfo(X, RA,
-                        X86_MC::getDwarfRegFlavour(TT, false),
-                        X86_MC::getDwarfRegFlavour(TT, true),
+                        X86_MC::getDwarfRegFlavour(TheTriple, false),
+                        X86_MC::getDwarfRegFlavour(TheTriple, true),
                         RA);
   X86_MC::InitLLVM2SEHRegisterMapping(X);
   return X;
@@ -276,12 +125,13 @@ static MCAsmInfo *createX86MCAsmInfo(const MCRegisterInfo &MRI, StringRef TT) {
       MAI = new X86_64MCAsmInfoDarwin(TheTriple);
     else
       MAI = new X86MCAsmInfoDarwin(TheTriple);
-  } else if (TheTriple.getEnvironment() == Triple::ELF) {
+  } else if (TheTriple.isOSBinFormatELF()) {
     // Force the use of an ELF container.
     MAI = new X86ELFMCAsmInfo(TheTriple);
-  } else if (TheTriple.getOS() == Triple::Win32) {
+  } else if (TheTriple.isWindowsMSVCEnvironment()) {
     MAI = new X86MCAsmInfoMicrosoft(TheTriple);
-  } else if (TheTriple.getOS() == Triple::MinGW32 || TheTriple.getOS() == Triple::Cygwin) {
+  } else if (TheTriple.isOSCygMing() ||
+             TheTriple.isWindowsItaniumEnvironment()) {
     MAI = new X86MCAsmInfoGNUCOFF(TheTriple);
   } else {
     // The default is ELF.
@@ -295,13 +145,13 @@ static MCAsmInfo *createX86MCAsmInfo(const MCRegisterInfo &MRI, StringRef TT) {
   // Initial state of the frame pointer is esp+stackGrowth.
   unsigned StackPtr = is64Bit ? X86::RSP : X86::ESP;
   MCCFIInstruction Inst = MCCFIInstruction::createDefCfa(
-      0, MRI.getDwarfRegNum(StackPtr, true), -stackGrowth);
+      nullptr, MRI.getDwarfRegNum(StackPtr, true), -stackGrowth);
   MAI->addInitialFrameState(Inst);
 
   // Add return address to move list
   unsigned InstPtr = is64Bit ? X86::RIP : X86::EIP;
   MCCFIInstruction Inst2 = MCCFIInstruction::createOffset(
-      0, MRI.getDwarfRegNum(InstPtr, true), stackGrowth);
+      nullptr, MRI.getDwarfRegNum(InstPtr, true), stackGrowth);
   MAI->addInitialFrameState(Inst2);
 
   return MAI;
@@ -353,39 +203,20 @@ static MCCodeGenInfo *createX86MCCodeGenInfo(StringRef TT, Reloc::Model RM,
     // 64-bit JIT places everything in the same buffer except external funcs.
     CM = is64Bit ? CodeModel::Large : CodeModel::Small;
 
-  X->InitMCCodeGenInfo(RM, CM, OL);
+  X->initMCCodeGenInfo(RM, CM, OL);
   return X;
 }
 
-static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
-                                    MCContext &Ctx, MCAsmBackend &MAB,
-                                    raw_ostream &_OS,
-                                    MCCodeEmitter *_Emitter,
-                                    const MCSubtargetInfo &STI,
-                                    bool RelaxAll,
-                                    bool NoExecStack) {
-  Triple TheTriple(TT);
-
-  if (TheTriple.isOSBinFormatMachO())
-    return createMachOStreamer(Ctx, MAB, _OS, _Emitter, RelaxAll);
-
-  if (TheTriple.isOSWindows() && TheTriple.getEnvironment() != Triple::ELF)
-    return createWinCOFFStreamer(Ctx, MAB, *_Emitter, _OS, RelaxAll);
-
-  return createELFStreamer(Ctx, MAB, _OS, _Emitter, RelaxAll, NoExecStack);
-}
-
-static MCInstPrinter *createX86MCInstPrinter(const Target &T,
+static MCInstPrinter *createX86MCInstPrinter(const Triple &T,
                                              unsigned SyntaxVariant,
                                              const MCAsmInfo &MAI,
                                              const MCInstrInfo &MII,
-                                             const MCRegisterInfo &MRI,
-                                             const MCSubtargetInfo &STI) {
+                                             const MCRegisterInfo &MRI) {
   if (SyntaxVariant == 0)
     return new X86ATTInstPrinter(MAI, MII, MRI);
   if (SyntaxVariant == 1)
     return new X86IntelInstPrinter(MAI, MII, MRI);
-  return 0;
+  return nullptr;
 }
 
 static MCRelocationInfo *createX86MCRelocationInfo(StringRef TT,
@@ -405,61 +236,42 @@ static MCInstrAnalysis *createX86MCInstrAnalysis(const MCInstrInfo *Info) {
 
 // Force static initialization.
 extern "C" void LLVMInitializeX86TargetMC() {
-  // Register the MC asm info.
-  RegisterMCAsmInfoFn A(TheX86_32Target, createX86MCAsmInfo);
-  RegisterMCAsmInfoFn B(TheX86_64Target, createX86MCAsmInfo);
+  for (Target *T : {&TheX86_32Target, &TheX86_64Target}) {
+    // Register the MC asm info.
+    RegisterMCAsmInfoFn X(*T, createX86MCAsmInfo);
 
-  // Register the MC codegen info.
-  RegisterMCCodeGenInfoFn C(TheX86_32Target, createX86MCCodeGenInfo);
-  RegisterMCCodeGenInfoFn D(TheX86_64Target, createX86MCCodeGenInfo);
+    // Register the MC codegen info.
+    RegisterMCCodeGenInfoFn Y(*T, createX86MCCodeGenInfo);
 
-  // Register the MC instruction info.
-  TargetRegistry::RegisterMCInstrInfo(TheX86_32Target, createX86MCInstrInfo);
-  TargetRegistry::RegisterMCInstrInfo(TheX86_64Target, createX86MCInstrInfo);
+    // Register the MC instruction info.
+    TargetRegistry::RegisterMCInstrInfo(*T, createX86MCInstrInfo);
 
-  // Register the MC register info.
-  TargetRegistry::RegisterMCRegInfo(TheX86_32Target, createX86MCRegisterInfo);
-  TargetRegistry::RegisterMCRegInfo(TheX86_64Target, createX86MCRegisterInfo);
+    // Register the MC register info.
+    TargetRegistry::RegisterMCRegInfo(*T, createX86MCRegisterInfo);
 
-  // Register the MC subtarget info.
-  TargetRegistry::RegisterMCSubtargetInfo(TheX86_32Target,
-                                          X86_MC::createX86MCSubtargetInfo);
-  TargetRegistry::RegisterMCSubtargetInfo(TheX86_64Target,
-                                          X86_MC::createX86MCSubtargetInfo);
+    // Register the MC subtarget info.
+    TargetRegistry::RegisterMCSubtargetInfo(*T,
+                                            X86_MC::createX86MCSubtargetInfo);
 
-  // Register the MC instruction analyzer.
-  TargetRegistry::RegisterMCInstrAnalysis(TheX86_32Target,
-                                          createX86MCInstrAnalysis);
-  TargetRegistry::RegisterMCInstrAnalysis(TheX86_64Target,
-                                          createX86MCInstrAnalysis);
+    // Register the MC instruction analyzer.
+    TargetRegistry::RegisterMCInstrAnalysis(*T, createX86MCInstrAnalysis);
 
-  // Register the code emitter.
-  TargetRegistry::RegisterMCCodeEmitter(TheX86_32Target,
-                                        createX86MCCodeEmitter);
-  TargetRegistry::RegisterMCCodeEmitter(TheX86_64Target,
-                                        createX86MCCodeEmitter);
+    // Register the code emitter.
+    TargetRegistry::RegisterMCCodeEmitter(*T, createX86MCCodeEmitter);
+
+    // Register the object streamer.
+    TargetRegistry::RegisterCOFFStreamer(*T, createX86WinCOFFStreamer);
+
+    // Register the MCInstPrinter.
+    TargetRegistry::RegisterMCInstPrinter(*T, createX86MCInstPrinter);
+
+    // Register the MC relocation info.
+    TargetRegistry::RegisterMCRelocationInfo(*T, createX86MCRelocationInfo);
+  }
 
   // Register the asm backend.
   TargetRegistry::RegisterMCAsmBackend(TheX86_32Target,
                                        createX86_32AsmBackend);
   TargetRegistry::RegisterMCAsmBackend(TheX86_64Target,
                                        createX86_64AsmBackend);
-
-  // Register the object streamer.
-  TargetRegistry::RegisterMCObjectStreamer(TheX86_32Target,
-                                           createMCStreamer);
-  TargetRegistry::RegisterMCObjectStreamer(TheX86_64Target,
-                                           createMCStreamer);
-
-  // Register the MCInstPrinter.
-  TargetRegistry::RegisterMCInstPrinter(TheX86_32Target,
-                                        createX86MCInstPrinter);
-  TargetRegistry::RegisterMCInstPrinter(TheX86_64Target,
-                                        createX86MCInstPrinter);
-
-  // Register the MC relocation info.
-  TargetRegistry::RegisterMCRelocationInfo(TheX86_32Target,
-                                           createX86MCRelocationInfo);
-  TargetRegistry::RegisterMCRelocationInfo(TheX86_64Target,
-                                           createX86MCRelocationInfo);
 }
