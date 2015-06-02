@@ -69,12 +69,13 @@ struct PatchLocation {
   PatchLocation() : Die(nullptr), Index(0) {}
   PatchLocation(DIE &Die, unsigned Index) : Die(&Die), Index(Index) {}
   PatchLocation(DIE &Die)
-      : Die(&Die), Index(std::distance(Die.begin_values(), Die.end_values())) {}
+      : Die(&Die), Index(std::distance(Die.values_begin(), Die.values_end())) {}
 
   void set(uint64_t New) const {
     assert(Die);
-    assert(Index < std::distance(Die->begin_values(), Die->end_values()));
-    const auto &Old = Die->begin_values()[Index];
+    assert((signed)Index <
+           std::distance(Die->values_begin(), Die->values_end()));
+    const auto &Old = Die->values_begin()[Index];
     assert(Old.getType() == DIEValue::isInteger);
     Die->setValue(Index,
                   DIEValue(Old.getAttribute(), Old.getForm(), DIEInteger(New)));
@@ -82,9 +83,10 @@ struct PatchLocation {
 
   uint64_t get() const {
     assert(Die);
-    assert(Index < std::distance(Die->begin_values(), Die->end_values()));
-    assert(Die->begin_values()[Index].getType() == DIEValue::isInteger);
-    return Die->begin_values()[Index].getDIEInteger().getValue();
+    assert((signed)Index <
+           std::distance(Die->values_begin(), Die->values_end()));
+    assert(Die->values_begin()[Index].getType() == DIEValue::isInteger);
+    return Die->values_begin()[Index].getDIEInteger().getValue();
   }
 };
 
@@ -1506,15 +1508,15 @@ bool DwarfLinker::hasValidRelocation(uint32_t StartOffset, uint32_t EndOffset,
     return false;
 
   const auto &ValidReloc = ValidRelocs[NextValidReloc++];
+  const auto &Mapping = ValidReloc.Mapping->getValue();
   if (Options.Verbose)
     outs() << "Found valid debug map entry: " << ValidReloc.Mapping->getKey()
            << " " << format("\t%016" PRIx64 " => %016" PRIx64,
-                            ValidReloc.Mapping->getValue().ObjectAddress,
-                            ValidReloc.Mapping->getValue().BinaryAddress);
+                            uint64_t(Mapping.ObjectAddress),
+                            uint64_t(Mapping.BinaryAddress));
 
-  Info.AddrAdjust = int64_t(ValidReloc.Mapping->getValue().BinaryAddress) +
-                    ValidReloc.Addend -
-                    ValidReloc.Mapping->getValue().ObjectAddress;
+  Info.AddrAdjust = int64_t(Mapping.BinaryAddress) +
+                    ValidReloc.Addend - Mapping.ObjectAddress;
   Info.InDebugMap = true;
   return true;
 }
@@ -2329,13 +2331,13 @@ void DwarfLinker::patchLineTableForUnit(CompileUnit &Unit,
 
   // Update the cloned DW_AT_stmt_list with the correct debug_line offset.
   if (auto *OutputDIE = Unit.getOutputUnitDIE()) {
-    auto Stmt = std::find_if(OutputDIE->begin_values(), OutputDIE->end_values(),
+    auto Stmt = std::find_if(OutputDIE->values_begin(), OutputDIE->values_end(),
                              [](const DIEValue &Value) {
       return Value.getAttribute() == dwarf::DW_AT_stmt_list;
     });
-    assert(Stmt != OutputDIE->end_values() &&
+    assert(Stmt != OutputDIE->values_end() &&
            "Didn't find DW_AT_stmt_list in cloned DIE!");
-    OutputDIE->setValue(Stmt - OutputDIE->begin_values(),
+    OutputDIE->setValue(Stmt - OutputDIE->values_begin(),
                         DIEValue(Stmt->getAttribute(), Stmt->getForm(),
                                  DIEInteger(Streamer->getLineSectionSize())));
   }

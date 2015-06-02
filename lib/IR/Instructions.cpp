@@ -1251,7 +1251,8 @@ GetElementPtrInst::GetElementPtrInst(const GetElementPtrInst &GEPI)
                   OperandTraits<GetElementPtrInst>::op_end(this) -
                       GEPI.getNumOperands(),
                   GEPI.getNumOperands()),
-      SourceElementType(GEPI.SourceElementType) {
+      SourceElementType(GEPI.SourceElementType),
+      ResultElementType(GEPI.ResultElementType) {
   std::copy(GEPI.op_begin(), GEPI.op_end(), op_begin());
   SubclassOptionalData = GEPI.SubclassOptionalData;
 }
@@ -2122,7 +2123,7 @@ unsigned CastInst::isEliminableCastPair(
     {  0, 0, 0,99,99, 0, 0,99,99,99, 0, 3, 0}, // FPToSI         |
     { 99,99,99, 0, 0,99,99, 0, 0,99,99, 4, 0}, // UIToFP         +- firstOp
     { 99,99,99, 0, 0,99,99, 0, 0,99,99, 4, 0}, // SIToFP         |
-    { 99,99,99, 0, 0,99,99, 1, 0,99,99, 4, 0}, // FPTrunc        |
+    { 99,99,99, 0, 0,99,99, 0, 0,99,99, 4, 0}, // FPTrunc        |
     { 99,99,99, 2, 2,99,99,10, 2,99,99, 4, 0}, // FPExt          |
     {  1, 0, 0,99,99, 0, 0,99,99,99, 7, 3, 0}, // PtrToInt       |
     { 99,99,99,99,99,99,99,99,99,11,99,15, 0}, // IntToPtr       |
