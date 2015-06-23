@@ -142,10 +142,9 @@ namespace CallingConv {
     /// arguments are shadowed by GPRs, and vice versa.
     X86_64_Win64 = 79,
 
-    /// \brief The calling convention used for __cdecl methods on win32.
-    /// Differs from the C calling convention only in that the order of the
-    /// first parameter and the sret parameter are swapped.
-    X86_CDeclMethod = 80,
+    /// \brief MSVC calling convention that passes vectors and vector aggregates
+    /// in SSE registers.
+    X86_VectorCall = 80,
 
     /// CIL_Instance - Calling convention used for CIL instance calls.
     CIL_Instance = 81,
@@ -161,10 +160,6 @@ namespace CallingConv {
     
     /// CIL_Static - Calling convention used for CIL static calls.
     CIL_Static = 85
-    
-    /// \brief MSVC calling convention that passes vectors and vector aggregates
-    /// in SSE registers.
-    X86_VectorCall = 80
   };
 } // End CallingConv namespace
 

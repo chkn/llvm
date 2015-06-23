@@ -31,6 +31,7 @@ namespace lltok {
     lparen, rparen,    // (  )
     exclaim,           // !
     bar,               // |
+    backslash,         // \
 
     kw_x,
     kw_true,    kw_false,

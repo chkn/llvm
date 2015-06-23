@@ -1529,41 +1529,14 @@ bool LLParser::ParseTypeMetadata(Type *Ty, PerFunctionState *PFS) {
   do {
     if (Lex.getKind() != lltok::MetadataVar)
       return TokError("expected metadata after comma");
-    
-    std::string Name = Lex.getStrVal();
-    unsigned MDK = M->getMDKindID(Name);
-    Lex.Lex();
-    
-    MDNode *Node;
-    SMLoc Loc = Lex.getLoc();
-    
-    if (ParseToken(lltok::exclaim, "expected '!' here"))
-      return true;
-    
-    // This code is similar to that of ParseMetadataValue, however it needs to
-    // have special-case code for a forward reference; see the comments on
-    // ForwardRefInstMetadata for details. Also, MDStrings are not supported
-    // at the top level here.
-    if (Lex.getKind() == lltok::lbrace) {
-      ValID ID;
-      if (ParseMetadataListValue(ID, PFS))
-	return true;
-      assert(ID.Kind == ValID::t_MDNode);
-      Ty->setMetadata(MDK, ID.MDNodeVal);
-    } else {
-      unsigned NodeID = 0;
-      if (ParseMDNodeID(Node, NodeID))
-	return true;
-      if (Node) {
-	// If we got the node, add it to the instruction.
-	Ty->setMetadata(MDK, Node);
-      } else {
-	MDRef R = { Loc, MDK, NodeID };
-	// Otherwise, remember that this should be resolved later.
-	ForwardRefTypeMetadata[Ty].push_back(R);
-      }
-    }
-    
+
+    unsigned MDK;
+    MDNode *N;
+    if (ParseMetadataAttachment(MDK, N))
+        return true;
+
+    Ty->setMetadata(MDK, N);
+
     // If this is the end of the list, we're done.
   } while (EatIfPresent(lltok::comma));
   return false;

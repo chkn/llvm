@@ -394,6 +394,7 @@ static void PrintLLVMName(raw_ostream &OS, const Value *V) {
 
 
 namespace {
+class SlotTracker;
 class TypePrinting {
   TypePrinting(const TypePrinting &) = delete;
   void operator=(const TypePrinting&) = delete;
@@ -405,11 +406,20 @@ public:
   /// NumberedTypes - The numbered types, along with their value.
   DenseMap<StructType*, unsigned> NumberedTypes;
 
-  TypePrinting() = default;
+  SlotTracker *Machine;
+  Module *TheModule;
+
+  TypePrinting() : Machine(nullptr), TheModule(nullptr) {}
 
   void incorporateTypes(const Module &M);
 
+  void incorporateFunctionTypes(const Module &M);
+
+  void incorporateStructType(StructType *STy);
+
   void print(Type *Ty, raw_ostream &OS);
+
+  void printMetadata(Type *Ty, raw_ostream &OS);
 
   void printStructBody(StructType *Ty, raw_ostream &OS);
 };
@@ -981,6 +991,11 @@ void SlotTracker::CreateAttributeSetSlot(AttributeSet AS) {
 //===----------------------------------------------------------------------===//
 // AsmWriter Implementation
 //===----------------------------------------------------------------------===//
+
+static void WriteAsOperandInternal(raw_ostream &Out, const Value *V,
+	  TypePrinting *TypePrinter,
+	  SlotTracker *Machine,
+	  const Module *Context);
 
 static void WriteAsOperandInternal(raw_ostream &Out, const Metadata *MD,
                                    TypePrinting *TypePrinter,

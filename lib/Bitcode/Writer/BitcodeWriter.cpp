@@ -492,6 +492,8 @@ static void WriteTypeMetadataAttachment(const Type& Ty,
 					BitstreamWriter &Stream) {
   // Write metadata attachments
   // METADATA_ATTACHMENT - [m x [value, [n x [id, mdnode]]]
+	llvm_unreachable("FIXME");
+#if FALSE
   SmallVector<std::pair<unsigned, MDNode*>, 4> MDs;
   Ty.getAllMetadata(MDs);
   
@@ -507,6 +509,7 @@ static void WriteTypeMetadataAttachment(const Type& Ty,
   
   Stream.EmitRecord(bitc::METADATA_ATTACHMENT, Record, 0);
   Stream.ExitBlock();
+#endif
 }
 
 static unsigned getEncodedLinkage(const GlobalValue &GV) {

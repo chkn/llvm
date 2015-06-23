@@ -16,8 +16,6 @@
 #include "llvm/PassSupport.h"
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/Support/TargetRegistry.h"
-#include "llvm/Analysis/ConstantsScanner.h"
-#include "llvm/Support/CallSite.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/TargetRegistry.h"

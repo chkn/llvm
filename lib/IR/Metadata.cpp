@@ -1178,66 +1178,37 @@ MDNode *Type::getMetadataImpl(StringRef Kind) const {
 /// node.  This updates/replaces metadata if already present, or removes it if
 /// Node is null.
 void Type::setMetadata(unsigned KindID, MDNode *Node) {
-  if (Node == 0 && !hasMetadata()) return;
+  if (Node == nullptr && !hasMetadata()) return;
+  auto &Info = getContext().pImpl->TypeMetadata[this];
   
   // Handle the case when we're adding/updating metadata on a type.
   if (Node) {
-    LLVMContextImpl::MDMapTy &Info = getContext().pImpl->TypeMetadataStore[this];
     assert(!Info.empty() == hasMetadataHashEntry() &&
 	   "HasMetadata bit is wonked");
     if (Info.empty()) {
       setHasMetadataHashEntry(true);
-    } else {
-      // Handle replacement of an existing value.
-      for (unsigned i = 0, e = Info.size(); i != e; ++i)
-	if (Info[i].first == KindID) {
-	  Info[i].second = Node;
-	  return;
-	}
     }
-    
-    // No replacement, just add it to the list.
-    Info.push_back(std::make_pair(KindID, Node));
+    Info.set(KindID, *Node);
     return;
   }
   
   // Otherwise, we're removing metadata from an instruction.
   assert((hasMetadataHashEntry() ==
-	  getContext().pImpl->TypeMetadataStore.count(this)) &&
+	  getContext().pImpl->TypeMetadata.count(this)) &&
 	 "HasMetadata bit out of date!");
   if (!hasMetadataHashEntry())
     return;  // Nothing to remove!
-  LLVMContextImpl::MDMapTy &Info = getContext().pImpl->TypeMetadataStore[this];
   
-  // Common case is removing the only entry.
-  if (Info.size() == 1 && Info[0].first == KindID) {
-    getContext().pImpl->TypeMetadataStore.erase(this);
-    setHasMetadataHashEntry(false);
-    return;
-  }
-  
-  // Handle removal of an existing value.
-  for (unsigned i = 0, e = Info.size(); i != e; ++i)
-    if (Info[i].first == KindID) {
-      Info[i] = Info.back();
-      Info.pop_back();
-      assert(!Info.empty() && "Removing last entry should be handled above");
-      return;
-    }
-  // Otherwise, removing an entry that doesn't exist on the instruction.
+  Info.erase(KindID);
 }
 
 MDNode *Type::getMetadataImpl(unsigned KindID) const {
   if (!hasMetadataHashEntry()) return 0;
   
-  LLVMContextImpl::MDMapTy &Info = getContext().pImpl->TypeMetadataStore[this];
+  auto &Info = getContext().pImpl->TypeMetadata[this];
   assert(!Info.empty() && "bit out of sync with hash table");
   
-  for (LLVMContextImpl::MDMapTy::iterator I = Info.begin(), E = Info.end();
-       I != E; ++I)
-    if (I->first == KindID)
-      return I->second;
-  return 0;
+  return Info.lookup(KindID);
 }
 
 void Type::getAllMetadataImpl(SmallVectorImpl<std::pair<unsigned,
@@ -1245,13 +1216,13 @@ void Type::getAllMetadataImpl(SmallVectorImpl<std::pair<unsigned,
   Result.clear();
   
   assert(hasMetadataHashEntry() &&
-	 getContext().pImpl->TypeMetadataStore.count(this) &&
+	 getContext().pImpl->TypeMetadata.count(this) &&
 	 "Shouldn't have called this");
-  const LLVMContextImpl::MDMapTy &Info =
-    getContext().pImpl->TypeMetadataStore.find(this)->second;
+  const auto &Info =
+    getContext().pImpl->TypeMetadata.find(this)->second;
   assert(!Info.empty() && "Shouldn't have called this");
   
-  Result.append(Info.begin(), Info.end());
+  Info.getAll(Result);
   
   // Sort the resulting array so it is stable.
   if (Result.size() > 1)

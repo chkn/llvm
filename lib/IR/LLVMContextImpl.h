@@ -993,42 +993,14 @@ public:
   /// CustomMDKindNames - Map to hold the metadata string to ID mapping.
   StringMap<unsigned> CustomMDKindNames;
 
-  /// MetadataStore - Collection of per-instruction metadata used in this
-  /// context.
-  DenseMap<const Instruction *, MDMapTy> MetadataStore;
-  
-  /// MetadataStore - Collection of per-instruction metadata used in this
-  /// context.
-  DenseMap<const Type *, MDMapTy> TypeMetadataStore;
-  
-  /// ScopeRecordIdx - This is the index in ScopeRecords for an MDNode scope
-  /// entry with no "inlined at" element.
-  DenseMap<MDNode*, int> ScopeRecordIdx;
-  
-  /// ScopeRecords - These are the actual mdnodes (in a value handle) for an
-  /// index.  The ValueHandle ensures that ScopeRecordIdx stays up to date if
-  /// the MDNode is RAUW'd.
-  std::vector<DebugRecVH> ScopeRecords;
-  
-  /// ScopeInlinedAtIdx - This is the index in ScopeInlinedAtRecords for an
-  /// scope/inlined-at pair.
-  DenseMap<std::pair<MDNode*, MDNode*>, int> ScopeInlinedAtIdx;
-  
-  /// ScopeInlinedAtRecords - These are the actual mdnodes (in value handles)
-  /// for an index.  The ValueHandle ensures that ScopeINlinedAtIdx stays up
-  /// to date.
-  std::vector<std::pair<DebugRecVH, DebugRecVH> > ScopeInlinedAtRecords;
-  
-  /// IntrinsicIDCache - Cache of intrinsic name (string) to numeric ID mappings
-  /// requested in this context
-  typedef DenseMap<const Function*, unsigned> IntrinsicIDCacheTy;
-  IntrinsicIDCacheTy IntrinsicIDCache;
-
   /// Collection of per-instruction metadata used in this context.
   DenseMap<const Instruction *, MDAttachmentMap> InstructionMetadata;
 
   /// Collection of per-function metadata used in this context.
   DenseMap<const Function *, MDAttachmentMap> FunctionMetadata;
+
+  /// Collection of per-type metadata used in this context.
+  DenseMap<const Type *, MDAttachmentMap> TypeMetadata;
 
   /// DiscriminatorTable - This table maps file:line locations to an
   /// integer representing the next DWARF path discriminator to assign to
@@ -1045,9 +1017,6 @@ public:
   /// Use.
   typedef DenseMap<const Function *, ReturnInst *> PrologueDataMapTy;
   PrologueDataMapTy PrologueDataMap;
-
-  int getOrAddScopeRecordIdxEntry(MDNode *N, int ExistingIdx);
-  int getOrAddScopeInlinedAtIdxEntry(MDNode *Scope, MDNode *IA,int ExistingIdx);
 
   LLVMContextImpl(LLVMContext &C);
   ~LLVMContextImpl();

@@ -417,7 +417,6 @@ namespace llvm {
   bool Parse##CLASS(MDNode *&Result, bool IsDistinct);
 #include "llvm/IR/Metadata.def"
 
->>>>>>> llvm-mirror/master
     // Function Parsing.
     struct ArgInfo {
       LocTy Loc;

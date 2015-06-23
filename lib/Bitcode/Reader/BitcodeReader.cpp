@@ -354,6 +354,7 @@ private:
   std::error_code parseAlignmentValue(uint64_t Exponent, unsigned &Alignment);
   std::error_code ParseAttrKind(uint64_t Code, Attribute::AttrKind *Kind);
   std::error_code ParseModule(bool Resume, bool ShouldLazyLoadMetadata = false);
+  std::error_code ParseTypeMetadataAttachment();
   std::error_code ParseAttributeBlock();
   std::error_code ParseAttributeGroupBlock();
   std::error_code ParseTypeTable();
@@ -3092,16 +3093,16 @@ std::error_code BitcodeReader::ParseModule(bool Resume,
 }
 
 /// ParseTypeMetadataAttachment - Parse metadata attachments.
-error_code BitcodeReader::ParseTypeMetadataAttachment() {
+std::error_code BitcodeReader::ParseTypeMetadataAttachment() {
   if (Stream.EnterSubBlock(bitc::TYPE_CODE_METADATA_ATTACHMENT_ID))
-    return Error(MalformedBlock/*"Malformed block record"*/);
+    return Error("Malformed block record");
   
   SmallVector<uint64_t, 64> Record;
   while(1) {
     unsigned Code = Stream.ReadCode();
     if (Code == bitc::END_BLOCK) {
       if (Stream.ReadBlockEnd())
-	return Error(MalformedBlock/*"Error at end of PARAMATTR block"*/);
+	return Error("Error at end of PARAMATTR block");
       break;
     }
     if (Code == bitc::DEFINE_ABBREV) {
@@ -3116,22 +3117,22 @@ error_code BitcodeReader::ParseTypeMetadataAttachment() {
     case bitc::METADATA_ATTACHMENT: {
       unsigned RecordLength = Record.size();
       if (Record.empty() || (RecordLength - 1) % 2 == 1)
-	return Error (InvalidRecord/*"Invalid METADATA_ATTACHMENT reader!"*/);
+	return Error ("Invalid METADATA_ATTACHMENT reader!");
       Type *Ty = TypeList.back();
       for (unsigned i = 1; i != RecordLength; i = i+2) {
 	unsigned Kind = Record[i];
 	DenseMap<unsigned, unsigned>::iterator I =
 	  MDKindMap.find(Kind);
 	if (I == MDKindMap.end())
-	  return Error(InvalidType/*"Invalid metadata kind ID"*/);
-	Value *Node = MDValueList.getValueFwdRef(Record[i+1]);
+	  return Error("Invalid metadata kind ID");
+	Metadata *Node = MDValueList.getValueFwdRef(Record[i+1]);
 	Ty->setMetadata(I->second, cast<MDNode>(Node));
       }
       break;
     }
     }
   }
-  return error_code::success();
+  return std::error_code();
 }
 
 std::error_code BitcodeReader::ParseBitcodeInto(Module *M,

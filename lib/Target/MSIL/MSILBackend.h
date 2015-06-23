@@ -14,9 +14,7 @@
 #define MSILBACKEND_H
 
 #include "llvm/Pass.h"
-#include "llvm/PassManager.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Analysis/FindUsedTypes.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
@@ -25,7 +23,6 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/CodeGen/IntrinsicLowering.h"
 
