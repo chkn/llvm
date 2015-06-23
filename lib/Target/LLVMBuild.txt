@@ -27,7 +27,7 @@ subdirectories =
  MSP430
  NVPTX
  Mips
- MSIL
+; MSIL
  PowerPC
  R600
  Sparc
